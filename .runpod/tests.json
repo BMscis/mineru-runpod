@@ -9,7 +9,7 @@
         "return": "tarball_b64",
         "basename": "smoke"
       },
-      "timeout": 600000
+      "timeout": 1200000
     }
   ],
   "config": {

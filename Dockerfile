@@ -6,9 +6,11 @@
 # At runtime: handler.py listens for RunPod jobs, downloads/decodes the input
 # PDF, calls MinerU's async parse, and returns the result as a base64 tarball.
 #
-# The MinerU 2.5 VLM model (~2.5 GB) is downloaded on first worker boot and
-# cached. With RunPod FlashBoot + idle_timeout = 10 s the model stays in GPU
-# memory across requests within the same warm container.
+# The MinerU 2.5 VLM model (~2.5 GB) is pre-cached at build time into the
+# image (see `Pre-cache MinerU weights` step below), so cold-starts don't
+# depend on HuggingFace reachability or model-download time. With RunPod
+# FlashBoot + idle_timeout = 10 s the model stays in GPU memory across
+# requests within the same warm container.
 
 ARG VLLM_VERSION=v0.6.6
 FROM vllm/vllm-openai:${VLLM_VERSION}
@@ -40,7 +42,17 @@ WORKDIR /worker
 COPY requirements.txt /worker/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the worker code last so iterating on it doesn't bust the pip cache.
+# Pre-cache MinerU weights into the image. Adds ~2.5 GB to the image but
+# eliminates the model download on first cold start (~60-90 s of latency
+# saved per fresh worker, and removes a network dependency on huggingface.co
+# at runtime). Runs after `pip install` so huggingface_hub is available;
+# runs BEFORE the handler.py copy so iterating on handler code doesn't bust
+# the model layer.
+RUN python -c "from huggingface_hub import snapshot_download; \
+    snapshot_download(repo_id='opendatalab/MinerU2.5-Pro-2604-1.2B')"
+
+# Copy the worker code last so iterating on it doesn't bust the pip / model
+# layers.
 COPY handler.py /worker/handler.py
 
 # Tiny fixture PDF used by the RunPod Hub validation tests (.runpod/tests.json
