@@ -48,7 +48,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # at runtime). Runs after `pip install` so huggingface_hub is available;
 # runs BEFORE the handler.py copy so iterating on handler code doesn't bust
 # the model layer.
-RUN python -c "from huggingface_hub import snapshot_download; \
+RUN python3 -c "from huggingface_hub import snapshot_download; \
     snapshot_download(repo_id='opendatalab/MinerU2.5-Pro-2604-1.2B')"
 
 # Copy the worker code last so iterating on it doesn't bust the pip / model
@@ -60,5 +60,6 @@ COPY handler.py /worker/handler.py
 # image and gives Hub a real document to round-trip on submission.
 COPY .runpod/test-fixture.pdf /worker/test-fixture.pdf
 
-# RunPod's serverless runtime invokes Python directly.
-CMD ["python", "-u", "handler.py"]
+# RunPod's serverless runtime invokes Python directly. `python3` is what
+# vllm/vllm-openai ships on PATH; `python` is not always aliased.
+CMD ["python3", "-u", "handler.py"]
