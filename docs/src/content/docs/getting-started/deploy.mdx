@@ -1,0 +1,65 @@
+---
+title: Deploy
+description: Three deploy paths for runpod-mineru. Hub one-click for most users, fork-and-build for customization, BYO image for full control.
+---
+
+There are three ways to get a runpod-mineru endpoint running. Pick the one that matches what you need to control.
+
+## Option A — Deploy from the RunPod Hub (easiest)
+
+This repo is published as a public Hub template. In the RunPod dashboard go to **The Hub → Serverless repos**, find `runpod-mineru`, click Deploy. RunPod builds the image on your account, you pick a GPU pool, and you get an endpoint id. No fork, no clone, no local setup.
+
+This is the recommended path if your goal is parsing PDFs, not customising the worker.
+
+## Option B — Fork and auto-build (for customization)
+
+Fork this repo into your own GitHub account if you want to:
+
+- Pin different versions of MinerU, vLLM, or other dependencies
+- Modify `handler.py` (custom input validation, extra output formats, etc.)
+- Run on a private GitHub repo
+
+Then in the RunPod dashboard:
+
+1. **The Hub → Serverless repos → Import Git Repository**, point at your fork. Branch `main`, Dockerfile path `Dockerfile`.
+2. RunPod builds the image (~5–10 min, watchable in the dashboard) and gives you a `template_id`.
+3. Create the endpoint. Pick one:
+   - **(B1) Dashboard, no local Python needed:** **Resources → Serverless → New Endpoint**, select your template, set `idle_timeout=10`, `workers_min=0`, `workers_max=3`, FlashBoot on, GPU pool `AMPERE_24`. Save and grab the endpoint id.
+   - **(B2) As code, reproducible across deployments:**
+     ```powershell
+     cp .env.example .env       # fill RUNPOD_API_KEY and MINERU_TEMPLATE_ID
+     pip install -e .[deploy]
+     python deploy.py --template-id $env:MINERU_TEMPLATE_ID
+     ```
+     Every knob in `deploy.py --help` matches a setting in the dashboard.
+
+Subsequent pushes to `main` on your fork rebuild the image automatically; the endpoint picks up the new image on next cold start (or force a redeploy from the dashboard).
+
+## Option C — Bring your own image
+
+For full control over the Docker layer, build and push to Docker Hub or GHCR yourself, then:
+
+```powershell
+python deploy.py --image yourhandle/runpod-mineru:0.1
+```
+
+This skips RunPod's auto-build entirely. Use it when you need custom base images, multi-stage builds, or air-gapped registries.
+
+## Endpoint defaults
+
+| Setting | Value | Why |
+|---|---|---|
+| `gpu_ids` | `AMPERE_24` | 24 GB A5000 / 3090 class. Fits the [MinerU 2.5 1.2B VLM](https://huggingface.co/opendatalab/MinerU2.5-Pro-2604-1.2B) comfortably with KV cache. |
+| `idle_timeout` | `10 s` | Scale workers to zero after 10 s of inactivity |
+| `workers_min` | `0` | Pay only when processing |
+| `workers_max` | `3` | Concurrency cap; bump for production |
+| `execution_timeout` | `900 s` | Per-job cap; covers a several-hundred-page parse |
+| `flashboot` | `true` | RunPod's fast cold-start tech |
+
+Override any of these via flags to `deploy.py` (e.g. `--gpu-ids ADA_24 --workers-max 5`).
+
+See [Choosing a GPU](/runpod-mineru/guides/choosing-gpu/) for when to deviate from the default 24 GB pool.
+
+## What you get after deploy
+
+An endpoint id like `abcdef123456` that accepts the documented [job input contract](/runpod-mineru/reference/api/) via RunPod's standard `/run` and `/runsync` endpoints. From there, see [Clients](/runpod-mineru/getting-started/clients/) for how to actually call it from your code.

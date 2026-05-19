@@ -40,11 +40,19 @@ export default defineConfig({
 			sidebar: [
 				{
 					label: "Getting Started",
-					items: ["getting-started/overview"],
+					items: [
+						"getting-started/overview",
+						"getting-started/deploy",
+						"getting-started/clients",
+					],
 				},
 				{
 					label: "Guides",
 					items: ["guides/choosing-gpu"],
+				},
+				{
+					label: "Reference",
+					items: ["reference/api"],
 				},
 			],
 			head: [

@@ -1,0 +1,130 @@
+---
+title: Clients
+description: Two ways to call your runpod-mineru endpoint. The Python MineruClient for quick starts, and the direct RunPod SDK / HTTP API for production.
+---
+
+The worker template ships a Python wrapper (`mineru_client`) for convenience, but the actual API is the JSON payload contract that the handler accepts. You can hit the endpoint from any language. This page covers the two main paths and when to pick each.
+
+## Path A: Quick start with `MineruClient`
+
+A small Python wrapper that lives in this repo. Best for prototyping, single-user scripts, and Python projects that don't yet need async submission or custom retry behaviour.
+
+```powershell
+pip install "mineru-client @ git+https://github.com/sergeyshmakov/runpod-mineru@v1.1.0"
+```
+
+```python
+from mineru_client import MineruClient
+
+client = MineruClient(endpoint_id="<your-endpoint-id>")
+result = client.parse_pdf(pdf_url="https://example.com/report.pdf", end_page=4)
+client.save_tarball(result, "./out/doc")
+```
+
+That's it. The wrapper builds the JSON payload, calls `/runsync` via the RunPod SDK, raises `MineruClientError` on failure, and extracts the tarball into a local directory.
+
+### What `MineruClient` gives you
+
+- Boilerplate reduction (~30 lines of payload-building collapsed to one call)
+- XOR validation on the three input transports (`pdf_url` / `pdf_b64` / `volume_path`)
+- Typed exception (`MineruClientError`) for handler-side errors
+- Helpers for unpacking tarball or inline responses to disk
+
+### What it doesn't give you
+
+- **No async submission.** Only exposes `run_sync`. If you want to fire off 100 parses concurrently, you'll need your own thread pool or `asyncio` layer on top.
+- **No retries or backoff.** Cold-start jobs can fail; the wrapper does not retry. Add your own retry logic with `tenacity` or similar if you need it.
+- **No streaming progress.** The handler emits `progress_update` events during a parse; the client ignores them.
+- **No typed response models.** Returns a raw `dict`. If you want a `ParsedDocument` Pydantic model, write your own adapter (see [the adapter example](https://github.com/sergeyshmakov/runpod-mineru/blob/main/examples/parser_adapter_example.py)).
+
+This is a deliberate scope choice. The wrapper is a starter, not a production framework.
+
+## Path B: Production direct with RunPod SDK / HTTP
+
+For high-throughput pipelines, async submission, language-agnostic callers, or anyone who already uses the RunPod SDK and doesn't want another abstraction. Hit the endpoint directly.
+
+### Python with `runpod` SDK
+
+```python
+import runpod
+runpod.api_key = "..."
+
+endpoint = runpod.Endpoint("<endpoint-id>")
+result = endpoint.run_sync({
+    "input": {
+        "pdf_url": "https://example.com/report.pdf",
+        "start_page": 0,
+        "end_page": 99,
+        "return": "tarball_b64",
+    }
+})
+```
+
+Four lines. The RunPod SDK supports async (`run`), streaming (`stream`), batching, and connection pooling. See the [RunPod Python SDK docs](https://docs.runpod.io/sdks/python/endpoints) for the full surface.
+
+### Any language with HTTP
+
+```python
+import httpx
+
+r = httpx.post(
+    f"https://api.runpod.ai/v2/{endpoint_id}/runsync",
+    headers={"Authorization": f"Bearer {api_key}"},
+    json={"input": {"pdf_url": "https://example.com/report.pdf"}},
+    timeout=900,
+)
+result = r.json()["output"]
+```
+
+Works in TypeScript, Go, Rust, curl, anything with an HTTP client. The endpoints are:
+
+- `POST /v2/{endpoint_id}/runsync` — submit a job and block until it finishes (or `execution_timeout` hits)
+- `POST /v2/{endpoint_id}/run` — submit asynchronously, returns a job id
+- `GET /v2/{endpoint_id}/status/{job_id}` — poll job status
+- `GET /v2/{endpoint_id}/stream/{job_id}` — stream progress updates
+
+Full job-input shape is in [API reference](/runpod-mineru/reference/api/).
+
+## How to choose
+
+| You're doing... | Path |
+|---|---|
+| Quick prototype, single Python script, "does this work?" | **A — MineruClient** |
+| One-off batch script with retries you'll write yourself | **A — MineruClient** |
+| Production ingest pipeline, > 10 concurrent parses | **B — RunPod SDK direct** |
+| Non-Python caller (TypeScript backend, Go service) | **B — HTTP direct** |
+| You already use `runpod.Endpoint` elsewhere | **B — SDK direct** |
+| You need streaming progress for long parses | **B — SDK `stream()`** |
+| You're wrapping into your own typed domain model | **B**, then implement your own adapter |
+
+Rough rule: prototype with A, switch to B when you outgrow it. Outgrowing happens at roughly: needing async, needing retries beyond what your job-scheduler does, or hitting throughput where the client becomes a bottleneck.
+
+## What the response looks like
+
+Either path returns the same handler response. Success:
+
+```json
+{
+  "ok": true,
+  "elapsed_seconds": 18.4,
+  "pages_processed": 100,
+  "mineru_version": "2.5.x",
+  "source": "url:https://...",
+  "tarball_b64": "..."
+}
+```
+
+Or with `return: "inline"`:
+
+```json
+{
+  "ok": true,
+  "elapsed_seconds": 18.4,
+  "markdown": "# Heading\n\nBody text...",
+  "content_list": [{"type": "text", "page_idx": 0, "text": "..."}, ...],
+  "middle": {...},
+  "images": {"img-1.png": "<base64>"}
+}
+```
+
+Failure responses set `ok: false` and include a top-level `error` key; RunPod marks the job FAILED in the dashboard. See [API reference](/runpod-mineru/reference/api/) for the full schema.
