@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: The most common failure modes — Hub build flakes, Blackwell crashes, OOM, Latin-on-Cyrillic — and how to read the worker's `debug` block to diagnose anything else.
+description: The most common failure modes — Hub build flakes, GPU compatibility on newer architectures, OOM, format-detection errors — and how to read the worker's `debug` block to diagnose anything else.
 ---
 
 When something doesn't work, the worker tries hard to fail loudly. Every response (success **and** failure) includes a `debug` block with what backend ran, which model loaded, what GPU the worker landed on, and per-phase timings. Start there.
@@ -37,13 +37,13 @@ What to look at:
 | `model_dir` | Filesystem path of the snapshot that actually loaded. Both VLM and pipeline models are baked into the image at `/root/.cache/huggingface/`; if this is `null` on a successful job, the image build skipped the model bake step (unusual — file a bug) |
 | `gpu.compute_capability` | 8.6 = Ampere (3090, A5000, A6000), 8.9 = Ada (4090, RTX 6000 Ada), 9.0 = Hopper (H100), 12.0 = **Blackwell — VLM will crash** |
 | `phase_ms.fetch_input` | If hundreds of seconds on a `file_url` job, the source URL is slow / failing |
-| `phase_ms.mineru_parse` | Per-page guidance: ~0.5 s for VLM, ~3–5 s for pipeline. If 10× expected, you're memory-bound and vLLM is swapping |
+| `phase_ms.mineru_parse` | Per-page guidance for warm workers: ~0.5 s for VLM, ~3–5 s for pipeline. **First call on a fresh worker is much higher** (model load + vLLM warmup adds ~60–120s for the VLM backend specifically). If a warm-worker call is 10× the expected per-page number, you're memory-bound and vLLM is swapping |
 
 The worker also prints two lines to stdout — visible in RunPod's worker logs:
 
 ```
 [mineru-worker] starting job: backend=vlm-auto-engine lang=en start=0 end=4 gpu=NVIDIA RTX 4090 cc=8.9
-[mineru-worker] done: elapsed=18.4s phase_ms={'fetch_input': 12, 'mineru_parse': 18420, 'package': 95} model_dir=/runpod-volume/.../snapshots/<hash>
+[mineru-worker] done: elapsed=18.4s phase_ms={'fetch_input': 12, 'mineru_parse': 18420, 'package': 95} model_dir=/root/.cache/huggingface/hub/.../snapshots/<hash>
 ```
 
 On failure:
@@ -68,9 +68,9 @@ The worker keeps running the previous image; the new one never propagates.
 
 To re-enable testing later, rename back to `.runpod/tests.json` and consider switching `gpuTypeId` from `"NVIDIA RTX A5000"` to `"NVIDIA GeForce RTX 4090"` — 4090 has the highest pool availability across RunPod's regions.
 
-## VLM backend crashes on Blackwell GPUs
+## VLM backend may crash on Blackwell GPUs (unverified on current image)
 
-**Symptom**: worker logs show successful model load followed by:
+**Symptom (originally observed)**: worker logs show successful model load followed by:
 
 ```
 compute_capability: 12.0 >= 8.0
@@ -81,41 +81,26 @@ CUDA error (...flash-attention/hopper/flash_fwd_launch_template.h:188): invalid 
 
 `debug.gpu.compute_capability` in the response is `12.0`.
 
-**Cause**: xformers/flash-attn in the worker image ships dedicated kernels for Ampere (8.x), Ada (8.9), and Hopper (9.0), but **no Blackwell (12.0) code path** as of vllm 0.11.2. When run on a Blackwell card, xformers misroutes to the Hopper kernel which crashes because Blackwell's ISA differs.
+**Cause (as of the previous image)**: xformers/flash-attn in `vllm/vllm-openai:v0.6.6` shipped dedicated kernels for Ampere (8.x), Ada (8.9), and Hopper (9.0), but no Blackwell (12.0) code path. On a Blackwell card xformers misrouted to the Hopper kernel and crashed.
 
-**Fix**: narrow your endpoint's GPU pool to exclude Blackwell. The template default `gpuIds: "AMPERE_24,ADA_24,AMPERE_48"` does this — all unambiguously pre-Blackwell. If you've manually opted into `ADA_48_PRO`, that's where you're getting Blackwell SKUs mixed in. Remove it.
+**Status on current image**: the template now uses `vllm/vllm-openai:v0.11.2`. **We have not retested on Blackwell since the bump** — vllm/xformers may or may not have added Blackwell support in the intervening 5 minor versions. The default `gpuIds: "AMPERE_24,ADA_24,AMPERE_48"` excludes Blackwell entirely so most users are unaffected.
 
-For workloads that need a 48 GB Ada card, use the `pipeline` backend (which doesn't use xformers/flash-attn and runs fine on any GPU) until vllm ships a Blackwell kernel.
+**Fix**: keep the default `gpuIds` list as-is. If you've manually opted into `ADA_48_PRO`, that pool can mix in Blackwell SKUs — remove it from your endpoint's GPU pool list. For workloads needing a 48 GB Ada card, the `pipeline` backend doesn't use xformers/flash-attn and is unaffected by the crash regardless of vllm version. See [Choosing a GPU](/runpod-mineru/guides/choosing-gpu/#a-note-on-ada_48_pro-and-blackwell) for the full background.
 
-See [Choosing a GPU](/runpod-mineru/guides/choosing-gpu/#a-note-on-ada_48_pro-and-blackwell) for the full background.
+## "Pod scaled to zero" but the next job has a noticeable cold start
 
-## VLM backend output is "Latinized" on non-English input
+**Symptom**: spiky workload. First job after a quiet period takes a long time; subsequent jobs in the same window are fast.
 
-**Symptom**: you parsed a Russian / Arabic / Chinese / Japanese document and the output is gibberish — recognizable structure (headings, tables) but text is transliterated to Latin glyphs that don't form real words.
+**Cause**: RunPod tears down the worker after `idle_timeout` seconds of inactivity. The next request spins a fresh worker — the cost is unpacking the image, loading the model into VRAM, and (for the VLM backend) JIT-compiling vLLM kernels.
 
-**Cause**: VLM backends (`vlm-auto-engine`, `vlm-http-client`, plus VLM-routed pages in the hybrid backends) **ignore the `lang` parameter** entirely — model selection isn't conditional on it. Empirically the VLM transliterates non-Latin scripts to Latin glyphs rather than producing real characters. MinerU's published "109 languages" claim refers to the pipeline backend's PaddleOCR layer, not the VLM; the VLM model card carries only `English` and `Chinese` HuggingFace language tags.
+**Expected magnitudes** (measured on RTX A5000, first VLM call on a freshly-spun worker):
 
-**Fix**: switch to the **pipeline backend** with a **script-family `lang` code** (not an ISO code):
-
-```json
-{
-  "input": {
-    "file_url": "...",
-    "backend": "pipeline",
-    "lang": "east_slavic"   // for Russian; see input-formats guide for full list
-  }
-}
-```
-
-The pipeline backend runs PaddleOCR which has dedicated 109-language script support.
-
-See [Input formats — the `lang` parameter](/runpod-mineru/guides/input-formats/#the-lang-parameter-pipeline-backend-only).
-
-## "Pod scaled to zero" but the next job has a 30-60 s cold start
-
-**Symptom**: spiky workload. First job after a quiet period takes 30–60 s; subsequent jobs in the same window are sub-second.
-
-**Cause**: this is FlashBoot working as intended. RunPod tears down the worker after `idle_timeout` seconds of inactivity. The next request spins a fresh worker — the cost is downloading the image (or restoring the FlashBoot snapshot), loading the model into VRAM, and JIT-compiling vLLM kernels.
+| Scenario | First-job latency |
+|---|---|
+| Warm worker (within `idle_timeout` window) | ~0.5 s/page for VLM, ~3–5 s/page for pipeline |
+| FlashBoot snapshot restore | ~30–60 s for the first job (RunPod's documented FlashBoot benefit) |
+| Cold worker, no FlashBoot, first VLM call | ~90–130 s for the first job (model load + vLLM warmup) |
+| Cold worker, no FlashBoot, first pipeline call | ~10–15 s for the first job (lighter; no vLLM warmup) |
 
 **Fix**: not a bug, but levers if it's a problem:
 
@@ -131,7 +116,7 @@ See [Input formats — the `lang` parameter](/runpod-mineru/guides/input-formats
 
 **Fix**:
 - **Bump to a 48 GB pool** for the affected workload (`AMPERE_48`)
-- **Switch to the pipeline backend** which doesn't use vLLM and runs in ~6 GB regardless of doc length
+- **Switch to the pipeline backend** which doesn't use vLLM and is documented at 4 GB minimum VRAM (per MinerU's hardware compatibility table), regardless of doc length
 - **Reduce concurrency** (`concurrencyModifier` on the endpoint) so fewer pages are in flight at once
 - **For one-off huge docs**, set `backend: "pipeline"` per-job — same worker can handle small docs with VLM and giant docs with pipeline
 
@@ -160,7 +145,7 @@ Most common reasons:
 **Fix**:
 - **Client-side**: pass a larger `timeout` to `parse_document(timeout=3600, ...)`
 - **Endpoint-side**: bump `--execution-timeout` in `deploy.py` (defaults to 900 s). Use `--execution-timeout 3600` for full books.
-- **Per-page math**: VLM ≈ 0.5 s/page, pipeline ≈ 3–5 s/page. A 1000-page book on pipeline = ~3000–5000 s.
+- **Per-page math (warm worker)**: VLM ≈ 0.5 s/page, pipeline ≈ 3–5 s/page. A 1000-page book on pipeline = ~3000–5000 s. **Add 90–130 s for the first call on a cold worker if VLM** (model load + vLLM warmup) — the cold-start tax is paid once per worker, not per page.
 
 ## Getting more help
 

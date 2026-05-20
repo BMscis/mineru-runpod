@@ -25,7 +25,7 @@ The output shape is the same regardless of input format: Markdown + `content_lis
 
 The five MinerU backends (see [Picking a backend](/runpod-mineru/guides/choosing-gpu/#picking-a-backend)) handle the input pool differently:
 
-- **`vlm-auto-engine`** (default): MinerU's end-to-end VLM. Best for **PDF**. MinerU's README attaches the [109-language claim](https://github.com/opendatalab/MinerU#supported-languages) specifically to the pipeline backend's OCR layer; the VLM's [model card](https://huggingface.co/opendatalab/MinerU2.5-Pro-2604-1.2B) carries only `English` and `Chinese` HuggingFace language tags. Empirically the VLM transliterates non-Latin scripts (Cyrillic, Arabic, Devanagari) to Latin glyphs rather than producing the real characters. For non-Latin content, prefer `pipeline` with a script-family `lang` code.
+- **`vlm-auto-engine`** (default): MinerU's end-to-end VLM. Best for **PDF**. MinerU's README attaches the [109-language claim](https://github.com/opendatalab/MinerU#supported-languages) specifically to the pipeline backend's OCR layer; the VLM's [model card](https://huggingface.co/opendatalab/MinerU2.5-Pro-2604-1.2B) carries only `English` and `Chinese` HuggingFace language tags. **Verified empirically on Russian (2026-05-21)**: the Pro VLM does produce real Cyrillic output despite the limited model-card tags. Coverage of other non-Latin scripts (Arabic, Devanagari, etc.) is undocumented and unverified by us; if you hit transliteration on those, `pipeline` with the matching script-family `lang` code is the documented-safe alternative.
 - **`pipeline`**: native multi-language OCR (109 languages). Best for **images** and **scanned PDFs without an embedded text layer**. Respects the `lang` parameter (script-family codes — see below).
 - **`hybrid-auto-engine`**: routes between pipeline and VLM based on page content. Best when you don't know in advance what mix of layouts you have.
 
@@ -50,7 +50,7 @@ For non-English/Chinese content, set `backend: "pipeline"` and use a **script-fa
 | `latin` | French, German, Indonesian, Polish, Spanish, Vietnamese, etc. |
 | `th` | Thai |
 
-The VLM backends (`vlm-*`, `hybrid-*` with VLM routing) **ignore the `lang` field**. Passing `lang: "east_slavic"` with `backend: "vlm-auto-engine"` does nothing — you'll get Latin-transliterated nonsense on Cyrillic input. This is one of the most common silent failures; see the [Troubleshooting guide](/runpod-mineru/guides/troubleshooting/#vlm-backend-output-is-latinized-on-non-english-input).
+The VLM backends (`vlm-*`, `hybrid-*` with VLM routing) **ignore the `lang` field** — model selection is not conditional on it. That said, the Pro VLM has been empirically verified to handle Cyrillic (Russian) correctly without `lang` being set, so for Cyrillic content either backend works. Coverage of other non-Latin scripts on the VLM is undocumented; if you see transliteration in practice, switching to `pipeline` with the right script-family `lang` code is the safer path.
 
 ## Examples
 
@@ -78,7 +78,7 @@ Default `backend: "vlm-auto-engine"`, `lang: "en"` — both ignored for non-Lati
 }
 ```
 
-Required combination. Without `backend: "pipeline"`, the VLM transliterates Cyrillic to nearest-Latin glyphs.
+Either backend produces Russian output (Pro VLM handles Cyrillic correctly; pipeline uses PaddleOCR with explicit script-family OCR models). For scans without an embedded text layer or for Cyrillic dialects beyond Russian/Ukrainian/Belarusian, `pipeline` is the documented-safe choice.
 
 ### Scanned image (PNG)
 
