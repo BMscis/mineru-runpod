@@ -201,7 +201,26 @@ For published Hub templates, the `gpuIds` field declares the default pool list u
 }
 ```
 
-This repo's default exposes both 24 GB and 48 GB tiers so users can opt up without re-publishing.
+This repo's default exposes 24 GB and 48 GB tiers so users can opt up without re-publishing. **You can change the pool list per-endpoint from the RunPod dashboard at any time** — the `hub.json` value is just the suggested starting set for new deploys.
+
+## Supported GPU pools — full reference
+
+The Hub default is intentionally conservative. The full list of RunPod pools that work (or are known not to) with this template:
+
+| Pool ID | What it contains | Compute | Status with MinerU 2.5 Pro |
+|---|---|---|---|
+| `AMPERE_24` *(default)* | RTX 3090 / RTX A5000, 24 GB | 8.6 | ✅ Tested by us; ~3.5 s/page VLM warm |
+| `ADA_24` *(default)* | RTX 4090, 24 GB | 8.9 | ✅ In default list; same vllm/xformers kernels as Ampere; expected to work |
+| `AMPERE_48` *(default)* | RTX A6000, 48 GB | 8.6 | ✅ In default list; same generation as A5000 |
+| `AMPERE_80` | NVIDIA A100 80 GB | 8.0 | ✅ The GPU MinerU benchmarks against (2.12 fps / ~0.5 s/page upstream). Compute 8.0 fully supported by vllm 0.11.2. Untested by us. |
+| `ADA_80_PRO` | RTX 6000 Ada variant | 8.9 | ✅ Should work; same kernels as `AMPERE_48`. Untested by us. |
+| `ADA_48_PRO` | RTX 6000 Ada *or* RTX PRO 6000 Blackwell — RunPod groups them together | 8.9 *or* **12.0** | ⚠️ Avoid: if RunPod schedules you on a Blackwell SKU, VLM backend will crash. Pipeline backend still runs on Blackwell. See [Blackwell note above](#a-note-on-ada_48_pro-and-blackwell). |
+
+Other pools (`HOPPER_*`, lower-VRAM Ampere SKUs, etc.) may exist in your RunPod account but I haven't verified the exact pool-ID strings. RunPod's pool IDs have been historically inconsistent — `ADA_48` vs `ADA_48_PRO` was a footgun we hit on this project. **Before adding a non-default pool to your endpoint, check RunPod's [GPU types reference](https://docs.runpod.io/references/gpu-types)** to confirm the exact ID string.
+
+To opt into a non-default pool, edit your endpoint's **GPU configuration** in the RunPod dashboard and add the pool ID to the comma-separated list. RunPod picks the first available pool from the list at scale-up time, so listing cheaper options first keeps cost lowest while making expensive options available if cheaper ones run out.
+
+**Why we don't put A100/H100 in the Hub default**: the `hub.json` `gpuIds` list is what new deployers see on the deploy form. Including `AMPERE_80` by default would make it look like A100 is the expected GPU for this template — it's not. Per-page cost on A100 is often *higher* than on AMPERE_24 because the hourly rate jump (~4×) outpaces the speed-up (~7×) only for sustained throughput. AMPERE_24 is the right default; opt into bigger only when you've measured a workload that needs it.
 
 ## A note on `ADA_48_PRO` and Blackwell
 
