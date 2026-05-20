@@ -3,7 +3,7 @@
 Generic — knows nothing about any particular calling project. Accepts a document
 from one of three transports (URL / inline base64 / mounted-volume path),
 parses with MinerU's chosen backend, and returns the output either as a
-base64-encoded tarball or inline.
+base64-encoded tarball, inline, or as a presigned URL to an S3-compatible bucket.
 
 Runtime: MinerU 3.1.x library, default model `opendatalab/MinerU2.5-Pro-2604-1.2B`.
 
@@ -47,7 +47,12 @@ Optional:
                                     URL of an external vLLM OpenAI-compatible server.
     formula_enable: bool = True
     table_enable  : bool = True
-    return        : str          — "tarball_b64" (default) | "inline"
+    return        : str          — "tarball_b64" (default) | "inline" | "s3"
+                                    "s3" uploads the .tar.gz output to the bucket
+                                    configured via BUCKET_* env vars and returns
+                                    a presigned URL valid for 1 hour. Use this
+                                    when outputs would exceed RunPod's gateway
+                                    response cap (~20 MB).
     basename      : str = "doc"  — filename stem for output files
 
 Response on success
@@ -65,7 +70,8 @@ Response on success
           "gpu": {"name": "NVIDIA RTX 4090", "compute_capability": "8.9", "total_memory_gb": 23.99},
           "phase_ms": {"fetch_input": 12, "mineru_parse": 18420, "package": 95}
       },
-      "tarball_b64": "..."         // or markdown/content_list/middle/images for inline
+      "tarball_b64": "..."         // or markdown/content_list/middle/images for inline,
+                                    // or `tarball_url` + `tarball_url_expires_at` for s3
     }
 
 Response on failure (RunPod marks job FAILED via the top-level `error` key)
@@ -217,14 +223,14 @@ INPUT_SCHEMA: dict[str, dict[str, Any]] = {
     "formula_enable": {"type": bool, "required": False, "default": True},
     "table_enable":   {"type": bool, "required": False, "default": True},
     "return":         {"type": str,  "required": False, "default": "tarball_b64",
-                       "constraints": lambda x: x in {"tarball_b64", "inline"}},
+                       "constraints": lambda x: x in {"tarball_b64", "inline", "s3"}},
     "basename":       {"type": str,  "required": False, "default": "doc",
                        "constraints": lambda x: bool(x) and all(
                            c.isalnum() or c in "-_" for c in x)},
 }
 
 
-_VALID_RETURNS = {"tarball_b64", "inline"}
+_VALID_RETURNS = {"tarball_b64", "inline", "s3"}
 
 
 def _validate_input(job_input: dict) -> dict:
@@ -388,6 +394,91 @@ def _package_tarball(output_dir: Path) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+def _build_tarball_bytes(output_dir: Path) -> bytes:
+    """Same archive as _package_tarball produces, but as raw bytes (for S3)."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for child in sorted(output_dir.iterdir()):
+            tar.add(child, arcname=child.name, recursive=True)
+    return buf.getvalue()
+
+
+# Default presigned URL lifetime for `return: "s3"` uploads.
+# An hour is enough for a caller to fetch the tarball but short enough that a
+# leaked URL stops working before it's interesting.
+_S3_PRESIGN_TTL_SECONDS = 3600
+
+
+def _package_s3(output_dir: Path, basename: str) -> dict[str, Any]:
+    """Upload the output tarball to an S3-compatible bucket and return a
+    presigned GET URL.
+
+    Required worker env vars: BUCKET_ENDPOINT_URL, BUCKET_NAME,
+    BUCKET_ACCESS_KEY_ID, BUCKET_SECRET_ACCESS_KEY. Optional:
+    BUCKET_REGION (some providers need this; default empty), BUCKET_PREFIX
+    (key path prefix inside the bucket; default empty).
+    """
+    endpoint = os.environ.get("BUCKET_ENDPOINT_URL", "").strip()
+    bucket = os.environ.get("BUCKET_NAME", "").strip()
+    access_key = os.environ.get("BUCKET_ACCESS_KEY_ID", "").strip()
+    secret_key = os.environ.get("BUCKET_SECRET_ACCESS_KEY", "").strip()
+    missing = [
+        name for name, val in (
+            ("BUCKET_ENDPOINT_URL", endpoint),
+            ("BUCKET_NAME", bucket),
+            ("BUCKET_ACCESS_KEY_ID", access_key),
+            ("BUCKET_SECRET_ACCESS_KEY", secret_key),
+        ) if not val
+    ]
+    if missing:
+        raise ValueError(
+            f"return='s3' requires worker env vars: {', '.join(missing)}. "
+            f"Set these in the RunPod endpoint env config and redeploy."
+        )
+
+    region = os.environ.get("BUCKET_REGION", "").strip() or None
+    prefix = os.environ.get("BUCKET_PREFIX", "").strip().lstrip("/")
+    if prefix and not prefix.endswith("/"):
+        prefix += "/"
+
+    # boto3 import is lazy so workers that never call return='s3' don't pay
+    # the ~50 MB cold-import cost.
+    import boto3  # noqa: PLC0415
+    from botocore.client import Config  # noqa: PLC0415
+
+    tarball_bytes = _build_tarball_bytes(output_dir)
+    # Use a UUID so concurrent jobs with the same basename don't collide.
+    import uuid  # noqa: PLC0415
+    key = f"{prefix}{basename}-{uuid.uuid4().hex}.tar.gz"
+
+    client = boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name=region,
+        # SigV4 is required by most S3-compatible providers (R2, B2, MinIO).
+        config=Config(signature_version="s3v4"),
+    )
+    client.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=tarball_bytes,
+        ContentType="application/gzip",
+    )
+    url = client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=_S3_PRESIGN_TTL_SECONDS,
+    )
+    return {
+        "tarball_url": url,
+        "tarball_url_expires_in": _S3_PRESIGN_TTL_SECONDS,
+        "bucket_key": key,
+        "bucket_bytes": len(tarball_bytes),
+    }
+
+
 def _package_inline(output_dir: Path, basename: str) -> dict[str, Any]:
     md_path = output_dir / f"{basename}.md"
     cl_path = output_dir / f"{basename}_content_list.json"
@@ -505,6 +596,8 @@ async def handler(job: dict) -> dict:
             }
             if cleaned["return"] == "inline":
                 response.update(_package_inline(output_dir, cleaned["basename"]))
+            elif cleaned["return"] == "s3":
+                response.update(_package_s3(output_dir, cleaned["basename"]))
             else:
                 response["tarball_b64"] = _package_tarball(output_dir)
             phase_ms["package"] = int((time.monotonic() - t) * 1000)

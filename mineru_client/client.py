@@ -52,7 +52,7 @@ class MineruClient:
         server_url: str | None = None,
         formula_enable: bool = True,
         table_enable: bool = True,
-        return_format: Literal["tarball_b64", "inline"] = "tarball_b64",
+        return_format: Literal["tarball_b64", "inline", "s3"] = "tarball_b64",
         basename: str = "doc",
         timeout: int = 900,
     ) -> dict[str, Any]:
@@ -73,6 +73,16 @@ class MineruClient:
         `backend="pipeline"` with a script-family `lang` code such as
         `"east_slavic"` (Russian/Ukrainian/Belarusian), `"cyrillic"`,
         `"latin"`, `"arabic"`, `"devanagari"`. NOT ISO codes.
+
+        Return formats:
+            "tarball_b64"  (default) base64-encoded .tar.gz in the response
+            "inline"       markdown + content_list + middle + images embedded
+                           in the response dict
+            "s3"           uploads the .tar.gz to an S3-compatible bucket
+                           configured on the worker via BUCKET_* env vars
+                           and returns a presigned URL valid for ~1 hour.
+                           Use this when outputs would exceed RunPod's
+                           gateway response cap (~20 MB).
         """
         provided = sum(1 for x in (file_url, file_b64, volume_path) if x)
         if provided != 1:
@@ -155,6 +165,29 @@ class MineruClient:
         dest.mkdir(parents=True, exist_ok=True)
         raw = base64.b64decode(result["tarball_b64"])
         with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
+            tar.extractall(dest)
+        return dest
+
+    @staticmethod
+    def save_s3_tarball(result: dict[str, Any], dest_dir: str | Path) -> Path:
+        """Download the presigned `tarball_url` from a `return: "s3"` response
+        and extract it into dest_dir. Returns the dir.
+
+        The presigned URL expires after ~1 hour; call this promptly after the
+        job returns.
+        """
+        if "tarball_url" not in result:
+            raise MineruClientError(
+                "result has no tarball_url; was return_format='s3'?"
+            )
+        # Lazy import so the client stays dependency-light for callers that
+        # only use the tarball_b64 / inline paths.
+        import urllib.request  # noqa: PLC0415
+        with urllib.request.urlopen(result["tarball_url"]) as resp:
+            data = resp.read()
+        dest = Path(dest_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
             tar.extractall(dest)
         return dest
 

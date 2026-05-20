@@ -163,3 +163,62 @@ def test_validate_input_defaults_applied():
     assert cleaned["backend"] == "vlm-auto-engine"
     assert cleaned["return"] == "tarball_b64"
     assert cleaned["basename"] == "doc"
+
+
+def test_validate_input_accepts_s3_return():
+    cleaned = handler._validate_input({"file_b64": "AA==", "return": "s3"})
+    assert cleaned["return"] == "s3"
+
+
+# -----------------------------------------------------------------------------
+# _package_s3 — env-var validation only; the actual upload requires boto3 +
+# a live S3 endpoint and is not exercised here.
+# -----------------------------------------------------------------------------
+
+def test_package_s3_requires_bucket_env_vars(tmp_path, monkeypatch):
+    # Strip any leaked credentials from the test process.
+    for var in (
+        "BUCKET_ENDPOINT_URL",
+        "BUCKET_NAME",
+        "BUCKET_ACCESS_KEY_ID",
+        "BUCKET_SECRET_ACCESS_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    out = tmp_path / "out"
+    out.mkdir()
+    _seed_mineru_output(out, "doc")
+    with pytest.raises(ValueError, match="BUCKET_"):
+        handler._package_s3(out, "doc")
+
+
+def test_package_s3_complains_about_each_missing_env_var(tmp_path, monkeypatch):
+    # All four names should be mentioned in the error.
+    for var in (
+        "BUCKET_ENDPOINT_URL",
+        "BUCKET_NAME",
+        "BUCKET_ACCESS_KEY_ID",
+        "BUCKET_SECRET_ACCESS_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    out = tmp_path / "out"
+    out.mkdir()
+    _seed_mineru_output(out, "doc")
+    with pytest.raises(ValueError) as excinfo:
+        handler._package_s3(out, "doc")
+    msg = str(excinfo.value)
+    assert "BUCKET_ENDPOINT_URL" in msg
+    assert "BUCKET_NAME" in msg
+    assert "BUCKET_ACCESS_KEY_ID" in msg
+    assert "BUCKET_SECRET_ACCESS_KEY" in msg
+
+
+def test_build_tarball_bytes_roundtrip(tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    _seed_mineru_output(out, "doc")
+    data = handler._build_tarball_bytes(out)
+    # Should be valid gzip-tar with the seeded files inside.
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        names = set(tar.getnames())
+    assert "doc.md" in names
+    assert "doc_content_list.json" in names

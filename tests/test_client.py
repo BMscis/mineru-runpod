@@ -152,3 +152,32 @@ def test_save_inline_writes_files(tmp_path):
 def test_save_inline_requires_markdown_field(tmp_path):
     with pytest.raises(MineruClientError, match="no markdown"):
         MineruClient.save_inline({"ok": True}, tmp_path)
+
+
+def test_save_s3_tarball_requires_url_field(tmp_path):
+    with pytest.raises(MineruClientError, match="no tarball_url"):
+        MineruClient.save_s3_tarball({"ok": True}, tmp_path)
+
+
+def test_save_s3_tarball_downloads_and_extracts(tmp_path):
+    # Build a fake tarball, host it on a local file:// URL, and verify
+    # save_s3_tarball fetches and extracts it. Uses file:// so we don't need
+    # network or a real bucket.
+    src = tmp_path / "fake.tar.gz"
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        md_data = b"# from s3\n"
+        info = tarfile.TarInfo("doc.md")
+        info.size = len(md_data)
+        tar.addfile(info, io.BytesIO(md_data))
+    src.write_bytes(buf.getvalue())
+
+    result = {"tarball_url": src.as_uri()}
+    dest = MineruClient.save_s3_tarball(result, tmp_path / "out")
+    assert (Path(dest) / "doc.md").read_bytes() == b"# from s3\n"
+
+
+def test_parse_document_forwards_s3_return(fake_endpoint):
+    client = MineruClient(endpoint_id="ep-1", api_key="x")
+    client.parse_document(file_url="https://x", return_format="s3")
+    assert client._endpoint.last_payload["return"] == "s3"
