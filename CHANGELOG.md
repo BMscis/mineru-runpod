@@ -1,3 +1,15 @@
+## [1.1.14](https://github.com/sergeyshmakov/runpod-mineru/compare/v1.1.13...v1.1.14) (2026-05-20)
+
+### Bug Fixes
+
+* trying to fix runpod hub release ([f8c53c9](https://github.com/sergeyshmakov/runpod-mineru/commit/f8c53c9ee9b111268b9873046c2cfc4b9b22ba18))
+
+### Documentation
+
+* minor docs update ([1a3eaa6](https://github.com/sergeyshmakov/runpod-mineru/commit/1a3eaa6bdb28cff1c9c6d4a33f97aa592fab639b))
+* shorten subheader ([7b1e4e6](https://github.com/sergeyshmakov/runpod-mineru/commit/7b1e4e6cc444587d772715fa1dfdf1f4899d4c7e))
+* update docs + blog ([11587f5](https://github.com/sergeyshmakov/runpod-mineru/commit/11587f5d6b66ee52c4123c94fb0bd18540be7ace))
+
 ## [1.1.13](https://github.com/sergeyshmakov/runpod-mineru/compare/v1.1.12...v1.1.13) (2026-05-20)
 
 ### Bug Fixes
