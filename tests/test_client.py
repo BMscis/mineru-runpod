@@ -23,7 +23,7 @@ def fake_endpoint(monkeypatch):
         def __init__(self, endpoint_id):
             self.endpoint_id = endpoint_id
             self.last_payload = None
-            # next_result is mutated by tests before calling parse_pdf().
+            # next_result is mutated by tests before calling parse_document().
             self.next_result = {"ok": True, "elapsed_seconds": 0.1, "pages_processed": 0,
                                 "mineru_version": "fake", "tarball_b64": ""}
 
@@ -57,22 +57,22 @@ def test_constructs_with_env_api_key(monkeypatch, fake_endpoint):
     assert client.endpoint_id == "ep-1"
 
 
-def test_parse_pdf_rejects_no_source(fake_endpoint):
+def test_parse_document_rejects_no_source(fake_endpoint):
     client = MineruClient(endpoint_id="ep-1", api_key="x")
     with pytest.raises(ValueError, match="exactly one"):
-        client.parse_pdf()
+        client.parse_document()
 
 
-def test_parse_pdf_rejects_multiple_sources(fake_endpoint):
+def test_parse_document_rejects_multiple_sources(fake_endpoint):
     client = MineruClient(endpoint_id="ep-1", api_key="x")
     with pytest.raises(ValueError, match="exactly one"):
-        client.parse_pdf(pdf_url="https://x", pdf_b64="abc")
+        client.parse_document(file_url="https://x", file_b64="abc")
 
 
-def test_parse_pdf_forwards_options(fake_endpoint):
+def test_parse_document_forwards_options(fake_endpoint):
     client = MineruClient(endpoint_id="ep-1", api_key="x")
-    client.parse_pdf(
-        pdf_url="https://example.com/p.pdf",
+    client.parse_document(
+        file_url="https://example.com/p.pdf",
         start_page=10,
         end_page=20,
         lang="ja",
@@ -83,7 +83,7 @@ def test_parse_pdf_forwards_options(fake_endpoint):
         basename="custom",
     )
     payload = client._endpoint.last_payload
-    assert payload["pdf_url"] == "https://example.com/p.pdf"
+    assert payload["file_url"] == "https://example.com/p.pdf"
     assert payload["start_page"] == 10
     assert payload["end_page"] == 20
     assert payload["lang"] == "ja"
@@ -94,21 +94,27 @@ def test_parse_pdf_forwards_options(fake_endpoint):
     assert payload["basename"] == "custom"
 
 
-def test_parse_pdf_raises_on_handler_error(fake_endpoint):
+def test_parse_document_raises_on_handler_error(fake_endpoint):
     client = MineruClient(endpoint_id="ep-1", api_key="x")
     client._endpoint.next_result = {"ok": False, "error": "boom"}
     with pytest.raises(MineruClientError, match="boom"):
-        client.parse_pdf(pdf_url="https://x")
+        client.parse_document(file_url="https://x")
 
 
-def test_parse_pdf_from_file_inlines_bytes(fake_endpoint, tmp_path):
+def test_parse_document_from_file_inlines_bytes(fake_endpoint, tmp_path):
     pdf = tmp_path / "tiny.pdf"
     pdf.write_bytes(b"%PDF-1.4\n%%EOF")
     client = MineruClient(endpoint_id="ep-1", api_key="x")
-    MineruClient.parse_pdf_from_file(client, pdf)
+    MineruClient.parse_document_from_file(client, pdf)
     payload = client._endpoint.last_payload
-    assert "pdf_b64" in payload
-    assert base64.b64decode(payload["pdf_b64"]) == b"%PDF-1.4\n%%EOF"
+    assert "file_b64" in payload
+    assert base64.b64decode(payload["file_b64"]) == b"%PDF-1.4\n%%EOF"
+
+
+def test_parse_document_http_client_requires_server_url(fake_endpoint):
+    client = MineruClient(endpoint_id="ep-1", api_key="x")
+    with pytest.raises(ValueError, match="server_url"):
+        client.parse_document(file_url="https://x", backend="vlm-http-client")
 
 
 def test_save_tarball_requires_tarball_field(tmp_path):

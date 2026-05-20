@@ -39,27 +39,50 @@ class MineruClient:
 
     # -- Submission ---------------------------------------------------------
 
-    def parse_pdf(
+    def parse_document(
         self,
         *,
-        pdf_url: str | None = None,
-        pdf_b64: str | None = None,
+        file_url: str | None = None,
+        file_b64: str | None = None,
         volume_path: str | None = None,
         start_page: int = 0,
         end_page: int | None = None,
         lang: str = "en",
-        backend: str = "vlm-vllm-async-engine",
+        backend: str = "vlm-auto-engine",
+        server_url: str | None = None,
         formula_enable: bool = True,
         table_enable: bool = True,
         return_format: Literal["tarball_b64", "inline"] = "tarball_b64",
         basename: str = "doc",
         timeout: int = 900,
     ) -> dict[str, Any]:
-        """Submit a synchronous parse job. Returns the handler's response dict."""
-        provided = sum(1 for x in (pdf_url, pdf_b64, volume_path) if x)
+        """Submit a synchronous parse job. Returns the handler's response dict.
+
+        Input formats (auto-detected by the worker):
+            PDF, image (PNG/JPEG/GIF/BMP/TIFF/WebP), DOCX, PPTX, XLSX.
+
+        Backends (MinerU 3.1.x):
+            "pipeline"           PaddleOCR + layout/formula/table. 109-language OCR.
+                                  Best for non-Latin scripts; respects `lang`.
+            "vlm-auto-engine"    VLM via vLLM (default). Fast on EN/CH; ignores `lang`.
+            "vlm-http-client"    VLM via external vLLM server (`server_url` required).
+            "hybrid-auto-engine" Pipeline + VLM auto-routed per page.
+            "hybrid-http-client" Hybrid with external VLM server.
+
+        For non-English/Chinese scripts (e.g. Russian/Cyrillic), use
+        `backend="pipeline"` with a script-family `lang` code such as
+        `"east_slavic"` (Russian/Ukrainian/Belarusian), `"cyrillic"`,
+        `"latin"`, `"arabic"`, `"devanagari"`. NOT ISO codes.
+        """
+        provided = sum(1 for x in (file_url, file_b64, volume_path) if x)
         if provided != 1:
             raise ValueError(
-                "exactly one of pdf_url / pdf_b64 / volume_path must be set"
+                "exactly one of file_url / file_b64 / volume_path must be set"
+            )
+        if backend.endswith("-http-client") and not server_url:
+            raise ValueError(
+                f"backend={backend!r} requires `server_url` pointing at an "
+                f"external vLLM OpenAI-compatible server"
             )
 
         # Build the payload field-by-field, skipping None values. The handler's
@@ -77,10 +100,12 @@ class MineruClient:
         }
         if end_page is not None:
             payload["end_page"] = end_page
-        if pdf_url is not None:
-            payload["pdf_url"] = pdf_url
-        if pdf_b64 is not None:
-            payload["pdf_b64"] = pdf_b64
+        if server_url is not None:
+            payload["server_url"] = server_url
+        if file_url is not None:
+            payload["file_url"] = file_url
+        if file_b64 is not None:
+            payload["file_b64"] = file_b64
         if volume_path is not None:
             payload["volume_path"] = volume_path
 
@@ -104,15 +129,18 @@ class MineruClient:
         return result
 
     @staticmethod
-    def parse_pdf_from_file(
+    def parse_document_from_file(
         client: "MineruClient",
-        pdf_path: str | Path,
+        file_path: str | Path,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Convenience: read a small local PDF and submit as pdf_b64."""
-        data = Path(pdf_path).read_bytes()
+        """Convenience: read a small local file and submit as file_b64.
+
+        Any format the worker supports (PDF, image, DOCX, PPTX, XLSX).
+        """
+        data = Path(file_path).read_bytes()
         b64 = base64.b64encode(data).decode("ascii")
-        return client.parse_pdf(pdf_b64=b64, **kwargs)
+        return client.parse_document(file_b64=b64, **kwargs)
 
     # -- Result handling ----------------------------------------------------
 

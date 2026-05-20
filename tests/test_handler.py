@@ -21,33 +21,33 @@ import handler
 
 
 # -----------------------------------------------------------------------------
-# _resolve_pdf_bytes
+# _resolve_input_bytes
 # -----------------------------------------------------------------------------
 
 def test_resolve_requires_exactly_one_source():
     with pytest.raises(ValueError, match="exactly one"):
-        asyncio.run(handler._resolve_pdf_bytes({}))
+        asyncio.run(handler._resolve_input_bytes({}))
     with pytest.raises(ValueError, match="exactly one"):
-        asyncio.run(handler._resolve_pdf_bytes({"pdf_url": "x", "pdf_b64": "y"}))
+        asyncio.run(handler._resolve_input_bytes({"file_url": "x", "file_b64": "y"}))
 
 
 def test_resolve_b64_roundtrip():
     payload = base64.b64encode(b"%PDF-1.4 inline").decode("ascii")
-    raw, src = asyncio.run(handler._resolve_pdf_bytes({"pdf_b64": payload}))
+    raw, src = asyncio.run(handler._resolve_input_bytes({"file_b64": payload}))
     assert raw == b"%PDF-1.4 inline"
     assert src == "b64"
 
 
 def test_resolve_b64_rejects_oversized_payload():
-    too_big = base64.b64encode(b"x" * (handler.MAX_INLINE_PDF_MB * 1024 * 1024 + 1)).decode("ascii")
-    with pytest.raises(ValueError, match="inline PDF too large"):
-        asyncio.run(handler._resolve_pdf_bytes({"pdf_b64": too_big}))
+    too_big = base64.b64encode(b"x" * (handler.MAX_INLINE_FILE_MB * 1024 * 1024 + 1)).decode("ascii")
+    with pytest.raises(ValueError, match="inline file too large"):
+        asyncio.run(handler._resolve_input_bytes({"file_b64": too_big}))
 
 
 def test_resolve_volume_path_reads_file(tmp_path):
     pdf = tmp_path / "doc.pdf"
     pdf.write_bytes(b"%PDF-1.4 volume")
-    raw, src = asyncio.run(handler._resolve_pdf_bytes({"volume_path": str(pdf)}))
+    raw, src = asyncio.run(handler._resolve_input_bytes({"volume_path": str(pdf)}))
     assert raw == b"%PDF-1.4 volume"
     assert src.startswith("volume:")
 
@@ -55,7 +55,33 @@ def test_resolve_volume_path_reads_file(tmp_path):
 def test_resolve_volume_path_missing_file(tmp_path):
     missing = tmp_path / "nope.pdf"
     with pytest.raises(ValueError, match="volume_path not found"):
-        asyncio.run(handler._resolve_pdf_bytes({"volume_path": str(missing)}))
+        asyncio.run(handler._resolve_input_bytes({"volume_path": str(missing)}))
+
+
+# -----------------------------------------------------------------------------
+# _detect_format
+# -----------------------------------------------------------------------------
+
+def test_detect_format_pdf():
+    assert handler._detect_format(b"%PDF-1.4\nfoo") == "pdf"
+
+
+def test_detect_format_image_png():
+    assert handler._detect_format(b"\x89PNG\r\n\x1a\nfoo") == "image"
+
+
+def test_detect_format_image_jpeg():
+    assert handler._detect_format(b"\xff\xd8\xff\xe0junk") == "image"
+
+
+def test_detect_format_ooxml():
+    # DOCX/PPTX/XLSX all start with the ZIP magic.
+    assert handler._detect_format(b"PK\x03\x04rest") == "ooxml"
+
+
+def test_detect_format_unknown():
+    assert handler._detect_format(b"not a real file") == "unknown"
+    assert handler._detect_format(b"") == "unknown"
 
 
 # -----------------------------------------------------------------------------
@@ -117,7 +143,7 @@ def test_handler_returns_error_on_bad_input():
 
 
 def test_handler_rejects_bad_basename():
-    result = asyncio.run(handler.handler({"input": {"pdf_b64": "AA==", "basename": "../bad"}}))
+    result = asyncio.run(handler.handler({"input": {"file_b64": "AA==", "basename": "../bad"}}))
     assert "error" in result
     assert result["ok"] is False
     # rp_validator reports its own message; we just check it's about input.
@@ -126,14 +152,14 @@ def test_handler_rejects_bad_basename():
 
 def test_validate_input_rejects_invalid_return_value():
     with pytest.raises(ValueError, match="input validation"):
-        handler._validate_input({"pdf_b64": "AA==", "return": "tarball-xml"})
+        handler._validate_input({"file_b64": "AA==", "return": "tarball-xml"})
 
 
 def test_validate_input_defaults_applied():
-    cleaned = handler._validate_input({"pdf_b64": "AA=="})
+    cleaned = handler._validate_input({"file_b64": "AA=="})
     assert cleaned["start_page"] == 0
     assert cleaned["end_page"] == -1
     assert cleaned["lang"] == "en"
-    assert cleaned["backend"] == "vlm-vllm-async-engine"
+    assert cleaned["backend"] == "vlm-auto-engine"
     assert cleaned["return"] == "tarball_b64"
     assert cleaned["basename"] == "doc"

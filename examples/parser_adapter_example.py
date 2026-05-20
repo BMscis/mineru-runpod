@@ -18,7 +18,7 @@ What it demonstrates
 1. A typed `ParsedDocument` with sections + chunks + page provenance.
 2. An abstract `ParserAdapter` interface that different backends can implement
    (MinerU today, another parser tomorrow).
-3. A concrete `MineruParserAdapter` that calls `MineruClient.parse_pdf()` and
+3. A concrete `MineruParserAdapter` that calls `MineruClient.parse_document()` and
    converts MinerU's `content_list_v2.json` entries into the domain model.
 4. Title-vs-paragraph classification, section nesting, and section-aware
    chunking.
@@ -120,9 +120,9 @@ class MineruParserAdapter(ParserAdapter):
         self._client = MineruClient(endpoint_id=endpoint_id, api_key=api_key)
 
     def parse(self, artifact: Artifact) -> ParsedDocument:
-        result = self._client.parse_pdf(
-            pdf_url=artifact.presigned_url,
-            pdf_b64=artifact.inline_bytes_b64,
+        result = self._client.parse_document(
+            file_url=artifact.presigned_url,
+            file_b64=artifact.inline_bytes_b64,
             volume_path=artifact.volume_path,
             lang=artifact.lang,
             return_format="inline",   # we want structured data, not a tarball
@@ -250,7 +250,7 @@ def _heading_level(title: str) -> int:
 
 def _main() -> int:
     if len(sys.argv) < 2:
-        print("usage: parser_adapter_example.py <pdf_url>", file=sys.stderr)
+        print("usage: parser_adapter_example.py <file_url>", file=sys.stderr)
         return 2
 
     adapter = MineruParserAdapter(

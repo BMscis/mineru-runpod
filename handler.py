@@ -1,23 +1,50 @@
-"""RunPod serverless worker for MinerU 2.5 PDF parsing.
+"""RunPod serverless worker for MinerU document parsing.
 
-Generic — knows nothing about any particular calling project. Accepts a PDF
+Generic — knows nothing about any particular calling project. Accepts a document
 from one of three transports (URL / inline base64 / mounted-volume path),
-parses with MinerU 2.5's VLM backend, and returns the output either as a
+parses with MinerU's chosen backend, and returns the output either as a
 base64-encoded tarball or inline.
+
+Runtime: MinerU 3.1.x library, default model `opendatalab/MinerU2.5-Pro-2604-1.2B`.
+
+Input formats (auto-detected from bytes):
+    PDF   — `application/pdf`
+    Image — PNG, JPEG, GIF, BMP, TIFF, WebP (single-page conversion to PDF)
+    DOCX  — Microsoft Word
+    PPTX  — Microsoft PowerPoint
+    XLSX  — Microsoft Excel
+
+Backends (per MinerU 3.1.x official docs):
+    pipeline           — PaddleOCR + layout/formula/table models. 109-language OCR.
+                          Best for non-Latin scripts; respects `lang` parameter.
+    vlm-auto-engine    — Single end-to-end VLM via vLLM (default). Fast on EN/CH.
+                          Ignores `lang`; native layout preservation.
+    vlm-http-client    — Same VLM, but served by an external vLLM server (set
+                          `server_url`). Useful for splitting model-serving from
+                          the worker pool.
+    hybrid-auto-engine — Mix of pipeline + VLM, auto-routed per page. Best
+                          quality on mixed-content docs; largest VRAM footprint.
+    hybrid-http-client — Hybrid with external VLM server.
 
 API contract (job input)
 ------------------------
 Exactly one of:
-    pdf_url      : str           — public or presigned HTTP(S) URL
-    pdf_b64      : str           — base64-encoded PDF bytes (≤ 20 MB; RunPod gateway cap)
-    volume_path  : str           — absolute path to a PDF inside the container
+    file_url     : str           — public or presigned HTTP(S) URL
+    file_b64     : str           — base64-encoded file bytes (≤ 20 MB; RunPod gateway cap)
+    volume_path  : str           — absolute path to a file inside the container
                                     (a mounted RunPod volume, or a file baked into the image)
 
 Optional:
-    start_page    : int = 0      — 0-based, inclusive
+    start_page    : int = 0      — 0-based, inclusive (PDF only)
     end_page      : int          — 0-based, inclusive; omit / -1 = end of document
-    lang          : str = "en"   — language hint passed to MinerU
-    backend       : str          — MinerU backend, default "vlm-vllm-async-engine"
+    lang          : str = "en"   — language hint passed to MinerU (pipeline backend
+                                    only; VLM backends ignore it). Script-family
+                                    codes: `east_slavic` (Russian/Ukrainian),
+                                    `cyrillic`, `latin`, `arabic`, `devanagari`,
+                                    `japan`, `korean`, etc. NOT ISO codes.
+    backend       : str          — MinerU backend, default "vlm-auto-engine"
+    server_url    : str          — Required for `*-http-client` backends.
+                                    URL of an external vLLM OpenAI-compatible server.
     formula_enable: bool = True
     table_enable  : bool = True
     return        : str          — "tarball_b64" (default) | "inline"
@@ -29,18 +56,25 @@ Response on success
       "ok": true,
       "elapsed_seconds": 18.4,
       "pages_processed": 100,
-      "mineru_version": "2.5.x",
+      "mineru_version": "3.1.x",
       "source": "url:https://...",
+      "debug": {
+          "backend": "vlm-auto-engine",
+          "input_format": "pdf",
+          "model_dir": "/runpod-volume/.../snapshots/<hash>",
+          "gpu": {"name": "NVIDIA RTX 4090", "compute_capability": "8.9", "total_memory_gb": 23.99},
+          "phase_ms": {"fetch_input": 12, "mineru_parse": 18420, "package": 95}
+      },
       "tarball_b64": "..."         // or markdown/content_list/middle/images for inline
     }
 
 Response on failure (RunPod marks job FAILED via the top-level `error` key)
 --------------------------------------------------------------------------
     {
-      "error": "ValueError: must provide exactly one of pdf_url / pdf_b64 / volume_path",
+      "error": "ValueError: must provide exactly one of file_url / file_b64 / volume_path",
       "ok": false,
       "elapsed_seconds": 0.1,
-      "mineru_version": "2.5.x",
+      "mineru_version": "3.1.x",
       "traceback": "..."
     }
 """
@@ -80,29 +114,106 @@ except Exception as e:  # pragma: no cover — handler returns the error to call
     _MINERU_AVAILABLE = False
 
 
+def _collect_gpu_info() -> dict[str, Any]:
+    """Best-effort GPU inventory for the response's `debug` block.
+
+    Helps callers distinguish a 4090 from an A5000 from a Blackwell MIG slice
+    without having to read worker logs. compute_capability >= 12.0 is what
+    triggers the xformers flash-attn crash on the VLM backend.
+    """
+    try:
+        import torch  # noqa: PLC0415
+        if not torch.cuda.is_available():
+            return {"available": False}
+        props = torch.cuda.get_device_properties(0)
+        return {
+            "available": True,
+            "name": props.name,
+            "compute_capability": f"{props.major}.{props.minor}",
+            "total_memory_gb": round(props.total_memory / 1024**3, 2),
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+def _find_model_dir() -> str | None:
+    """Locate the MinerU model snapshot under HF_HOME so we can prove which
+    weights actually loaded (Pro-2604 vs the library default 2509)."""
+    hf_home = os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
+    hub = Path(hf_home) / "hub"
+    if not hub.is_dir():
+        return None
+    matches = list(hub.glob("models--opendatalab--MinerU*"))
+    if not matches:
+        return None
+    # If multiple MinerU model dirs are cached, report the most recently used
+    # one — that's the one the library most likely resolved to.
+    best = max(matches, key=lambda p: p.stat().st_mtime)
+    snapshots = best / "snapshots"
+    if snapshots.is_dir():
+        snap_dirs = [d for d in snapshots.iterdir() if d.is_dir()]
+        if snap_dirs:
+            return str(max(snap_dirs, key=lambda p: p.stat().st_mtime))
+    return str(best)
+
+
 # RunPod's gateway caps payloads at 10 MB (/run) and 20 MB (/runsync). The
 # 20 MB ceiling is the largest a caller can realistically send inline; the
 # handler enforces it defensively but oversized requests are normally
 # rejected at the gateway before reaching us. For larger files, use
-# pdf_url or volume_path.
-MAX_INLINE_PDF_MB = 20
+# file_url or volume_path.
+MAX_INLINE_FILE_MB = 20
+
+# Magic bytes for the input formats MinerU 3.1.x supports.
+# - PDFs and Office docs pass straight to aio_do_parse (it auto-detects).
+# - Images need preprocessing to single-page PDF via images_bytes_to_pdf_bytes.
+_IMAGE_MAGIC = (
+    b"\x89PNG\r\n\x1a\n",   # PNG
+    b"\xff\xd8\xff",        # JPEG
+    b"GIF87a", b"GIF89a",   # GIF
+    b"BM",                  # BMP
+    b"II*\x00",             # TIFF little-endian
+    b"MM\x00*",             # TIFF big-endian
+    b"RIFF",                # WebP container (also AVI / WAV — rare as PDF inputs)
+)
+_PDF_MAGIC = b"%PDF"
+_ZIP_MAGIC = b"PK\x03\x04"  # DOCX / PPTX / XLSX (all OOXML) and ZIP itself
+
+
+def _detect_format(file_bytes: bytes) -> str:
+    """Return one of: "pdf" | "image" | "ooxml" | "unknown".
+
+    OOXML (DOCX/PPTX/XLSX) all start with the ZIP magic; MinerU's own
+    `guess_suffix_by_bytes` inspects the archive's content-types to discriminate.
+    We just flag "ooxml" and let MinerU decide which of the three it is.
+    """
+    if not file_bytes:
+        return "unknown"
+    if file_bytes.startswith(_PDF_MAGIC):
+        return "pdf"
+    if any(file_bytes.startswith(m) for m in _IMAGE_MAGIC):
+        return "image"
+    if file_bytes.startswith(_ZIP_MAGIC):
+        return "ooxml"
+    return "unknown"
 
 
 # -----------------------------------------------------------------------------
 # Input schema (rp_validator) — type coercion + bounds for the easy fields.
-# The "exactly one of pdf_url/pdf_b64/volume_path" rule is enforced manually
+# The "exactly one of file_url/file_b64/volume_path" rule is enforced manually
 # below because rp_validator doesn't express XOR.
 # -----------------------------------------------------------------------------
 
 INPUT_SCHEMA: dict[str, dict[str, Any]] = {
-    "pdf_url":        {"type": str,  "required": False, "default": None},
-    "pdf_b64":        {"type": str,  "required": False, "default": None},
+    "file_url":       {"type": str,  "required": False, "default": None},
+    "file_b64":       {"type": str,  "required": False, "default": None},
     "volume_path":    {"type": str,  "required": False, "default": None},
     "start_page":     {"type": int,  "required": False, "default": 0,
                        "constraints": lambda x: x >= 0},
     "end_page":       {"type": int,  "required": False, "default": -1},
     "lang":           {"type": str,  "required": False, "default": "en"},
-    "backend":        {"type": str,  "required": False, "default": "vlm-vllm-async-engine"},
+    "backend":        {"type": str,  "required": False, "default": "vlm-auto-engine"},
+    "server_url":     {"type": str,  "required": False, "default": None},
     "formula_enable": {"type": bool, "required": False, "default": True},
     "table_enable":   {"type": bool, "required": False, "default": True},
     "return":         {"type": str,  "required": False, "default": "tarball_b64",
@@ -146,10 +257,10 @@ def _validate_input(job_input: dict) -> dict:
             f"input validation failed: start_page must be >= 0; got {start_page!r}"
         )
 
-    sources = [k for k in ("pdf_url", "pdf_b64", "volume_path") if cleaned.get(k)]
+    sources = [k for k in ("file_url", "file_b64", "volume_path") if cleaned.get(k)]
     if len(sources) != 1:
         raise ValueError(
-            f"must provide exactly one of pdf_url / pdf_b64 / volume_path "
+            f"must provide exactly one of file_url / file_b64 / volume_path "
             f"(got {sources!r})"
         )
     return cleaned
@@ -159,37 +270,39 @@ def _validate_input(job_input: dict) -> dict:
 # Input → PDF bytes
 # -----------------------------------------------------------------------------
 
-async def _resolve_pdf_bytes(job_input: dict) -> tuple[bytes, str]:
-    """Return (pdf_bytes, source_label). Raises ValueError on bad input."""
-    # Legacy path used by the test suite: it calls _resolve_pdf_bytes directly
-    # with a raw payload. Keep that behaviour by re-deriving the source here
-    # rather than relying on the validated dict.
+async def _resolve_input_bytes(job_input: dict) -> tuple[bytes, str]:
+    """Return (file_bytes, source_label). Raises ValueError on bad input.
+
+    Format is auto-detected downstream by `_detect_format` / MinerU itself —
+    this function just fetches the raw bytes from whichever transport the
+    caller used.
+    """
     sources = {
-        "pdf_url": job_input.get("pdf_url"),
-        "pdf_b64": job_input.get("pdf_b64"),
+        "file_url": job_input.get("file_url"),
+        "file_b64": job_input.get("file_b64"),
         "volume_path": job_input.get("volume_path"),
     }
     provided = [k for k, v in sources.items() if v]
     if len(provided) != 1:
         raise ValueError(
-            f"must provide exactly one of pdf_url / pdf_b64 / volume_path "
+            f"must provide exactly one of file_url / file_b64 / volume_path "
             f"(got {provided!r})"
         )
     key = provided[0]
     value = sources[key]
 
-    if key == "pdf_url":
+    if key == "file_url":
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.get(value, follow_redirects=True)
             resp.raise_for_status()
             return resp.content, f"url:{value}"
 
-    if key == "pdf_b64":
+    if key == "file_b64":
         raw = base64.b64decode(value)
-        if len(raw) > MAX_INLINE_PDF_MB * 1024 * 1024:
+        if len(raw) > MAX_INLINE_FILE_MB * 1024 * 1024:
             raise ValueError(
-                f"inline PDF too large ({len(raw) / 1024 / 1024:.1f} MB); "
-                f"use pdf_url or volume_path for files > {MAX_INLINE_PDF_MB} MB"
+                f"inline file too large ({len(raw) / 1024 / 1024:.1f} MB); "
+                f"use file_url or volume_path for files > {MAX_INLINE_FILE_MB} MB"
             )
         return raw, "b64"
 
@@ -207,14 +320,16 @@ async def _resolve_pdf_bytes(job_input: dict) -> tuple[bytes, str]:
 # -----------------------------------------------------------------------------
 
 async def _run_mineru(
-    pdf_bytes: bytes,
+    file_bytes: bytes,
     basename: str,
     work_dir: Path,
     *,
+    input_format: str,
     start_page: int,
     end_page: int | None,
     lang: str,
     backend: str,
+    server_url: str | None,
     formula_enable: bool,
     table_enable: bool,
 ) -> Path:
@@ -223,18 +338,32 @@ async def _run_mineru(
     # Late re-import keeps the static import wrapped; the binding is the real one here.
     from mineru.cli.common import aio_do_parse as _aio_do_parse  # type: ignore[import-not-found]
 
+    # MinerU's `aio_do_parse` accepts PDFs, DOCX, PPTX, XLSX bytes directly via
+    # `pdf_bytes_list` (the name is legacy — it's polymorphic). Images need
+    # pre-conversion to single-page PDF first.
+    if input_format == "image":
+        from mineru.utils.pdf_image_tools import images_bytes_to_pdf_bytes  # type: ignore[import-not-found]  # noqa: PLC0415
+        file_bytes = images_bytes_to_pdf_bytes(file_bytes)
+
+    # MinerU 3.1.x adds f_dump_model_output / f_dump_orig_pdf with default True
+    # — both write extra artefacts (raw model output JSON, copy of input PDF)
+    # that bloat the response tarball without serving callers we know about.
+    # Turn them off; callers who want them can fork the handler.
     await _aio_do_parse(
         output_dir=str(work_dir),
         pdf_file_names=[basename],
-        pdf_bytes_list=[pdf_bytes],
+        pdf_bytes_list=[file_bytes],
         p_lang_list=[lang],
         backend=backend,
+        server_url=server_url,
         parse_method="auto",
         formula_enable=formula_enable,
         table_enable=table_enable,
         f_dump_md=True,
         f_dump_content_list=True,
         f_dump_middle_json=True,
+        f_dump_model_output=False,
+        f_dump_orig_pdf=False,
         start_page_id=start_page,
         end_page_id=end_page,
     )
@@ -296,6 +425,8 @@ def _maybe_progress(job: dict, data: dict) -> None:
 
 async def handler(job: dict) -> dict:
     started = time.monotonic()
+    phase_ms: dict[str, int] = {}
+    gpu_info = _collect_gpu_info()
     try:
         cleaned = _validate_input(job.get("input") or {})
 
@@ -304,33 +435,64 @@ async def handler(job: dict) -> dict:
         end_page_val = cleaned["end_page"]
         end_page = None if end_page_val is None or end_page_val < 0 else int(end_page_val)
 
+        backend = cleaned["backend"]
+        server_url = cleaned.get("server_url")
+        if backend.endswith("-http-client") and not server_url:
+            raise ValueError(
+                f"backend={backend!r} requires `server_url` pointing at an "
+                f"external vLLM OpenAI-compatible server"
+            )
+        print(
+            f"[mineru-worker] starting job: backend={backend} lang={cleaned['lang']} "
+            f"start={cleaned['start_page']} end={end_page} "
+            f"gpu={gpu_info.get('name', '?')} cc={gpu_info.get('compute_capability', '?')}",
+            flush=True,
+        )
+
         # Surface progress to RunPod's dashboard / streaming consumers.
-        _maybe_progress(job, {"phase": "fetching_pdf"})
-        pdf_bytes, source = await _resolve_pdf_bytes(cleaned)
+        _maybe_progress(job, {"phase": "fetching_input"})
+        t = time.monotonic()
+        file_bytes, source = await _resolve_input_bytes(cleaned)
+        phase_ms["fetch_input"] = int((time.monotonic() - t) * 1000)
+
+        input_format = _detect_format(file_bytes)
+        if input_format == "unknown":
+            raise ValueError(
+                "input bytes do not match any supported format "
+                "(PDF, PNG/JPEG/GIF/BMP/TIFF/WebP image, or DOCX/PPTX/XLSX). "
+                "Check that file_b64 was base64-encoded correctly and that "
+                "file_url returned the file body (not an error page)."
+            )
 
         _maybe_progress(job, {
             "phase": "parsing",
-            "pdf_bytes": len(pdf_bytes),
+            "input_bytes": len(file_bytes),
+            "input_format": input_format,
             "start_page": cleaned["start_page"],
             "end_page": end_page,
         })
 
         with tempfile.TemporaryDirectory(prefix="mineru-job-") as tmp:
             work_dir = Path(tmp)
+            t = time.monotonic()
             output_dir = await _run_mineru(
-                pdf_bytes,
+                file_bytes,
                 basename=cleaned["basename"],
                 work_dir=work_dir,
+                input_format=input_format,
                 start_page=cleaned["start_page"],
                 end_page=end_page,
                 lang=cleaned["lang"],
-                backend=cleaned["backend"],
+                backend=backend,
+                server_url=server_url,
                 formula_enable=cleaned["formula_enable"],
                 table_enable=cleaned["table_enable"],
             )
+            phase_ms["mineru_parse"] = int((time.monotonic() - t) * 1000)
 
             _maybe_progress(job, {"phase": "packaging"})
 
+            t = time.monotonic()
             pages_processed = (
                 (end_page - cleaned["start_page"] + 1) if end_page is not None else -1
             )
@@ -345,17 +507,38 @@ async def handler(job: dict) -> dict:
                 response.update(_package_inline(output_dir, cleaned["basename"]))
             else:
                 response["tarball_b64"] = _package_tarball(output_dir)
+            phase_ms["package"] = int((time.monotonic() - t) * 1000)
+
+            model_dir = _find_model_dir()
+            response["debug"] = {
+                "backend": backend,
+                "input_format": input_format,
+                "model_dir": model_dir,
+                "gpu": gpu_info,
+                "phase_ms": phase_ms,
+            }
+            print(
+                f"[mineru-worker] done: elapsed={response['elapsed_seconds']}s "
+                f"phase_ms={phase_ms} model_dir={model_dir}",
+                flush=True,
+            )
             return response
 
     except Exception as exc:  # noqa: BLE001
         # Top-level `error` key tells RunPod to mark this job FAILED.
         # Keep `ok=false` and the structured details so clients see context.
+        print(f"[mineru-worker] failed: {type(exc).__name__}: {exc}", flush=True)
         return {
             "error": f"{type(exc).__name__}: {exc}",
             "ok": False,
             "elapsed_seconds": round(time.monotonic() - started, 2),
             "mineru_version": MINERU_VERSION,
             "traceback": traceback.format_exc(limit=5),
+            "debug": {
+                "gpu": gpu_info,
+                "model_dir": _find_model_dir(),
+                "phase_ms": phase_ms,
+            },
         }
 
 

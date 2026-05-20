@@ -17,7 +17,7 @@ from mineru_client import MineruClient
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("usage: parse_url_example.py <pdf_url>", file=sys.stderr)
+        print("usage: parse_url_example.py <file_url>", file=sys.stderr)
         return 2
     url = sys.argv[1]
 
@@ -25,8 +25,8 @@ def main() -> int:
         endpoint_id=os.environ["RUNPOD_ENDPOINT_ID"],
         api_key=os.environ["RUNPOD_API_KEY"],
     )
-    result = client.parse_pdf(
-        pdf_url=url,
+    result = client.parse_document(
+        file_url=url,
         start_page=0,
         end_page=4,            # first 5 pages, for a quick smoke test
         return_format="tarball_b64",
