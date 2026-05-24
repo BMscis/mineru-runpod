@@ -8,9 +8,7 @@
 # PDF, calls MinerU's async parse, and returns the result as a base64 tarball.
 #
 # Model weights are baked into the image at build time (under HF's default
-# cache at /root/.cache/huggingface). This is the community pattern for
-# fixed multi-model workers (worker-comfyui, worker-faster_whisper,
-# runpod-worker-real-esrgan all do the same). RunPod's Cached Models
+# cache at /root/.cache/huggingface). RunPod's Cached Models
 # dashboard feature only supports one model per endpoint, and MinerU needs
 # two: the VLM (opendatalab/MinerU2.5-Pro-2604-1.2B) and the pipeline-
 # backend model set (opendatalab/PDF-Extract-Kit-1.0). Baking both removes
