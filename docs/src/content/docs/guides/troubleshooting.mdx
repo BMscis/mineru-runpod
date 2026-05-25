@@ -42,21 +42,55 @@ What to look at:
 The worker also emits structured log lines visible in RunPod's worker
 log viewer — see [reading worker logs](#reading-worker-logs) below.
 
-## Hub build keeps failing with "Pod could not be created"
+## Hub build fails on the validator test pod
 
-**Symptom**: `git push` (or a semantic-release version-bump commit) triggers a RunPod Hub build. The Docker image builds successfully, but the build is marked failed with:
+After every push, RunPod's Hub builds the image and then spins up a real GPU pod to execute `.runpod/tests.json`. The image is fine; the test pod fails. Three failure modes account for almost everything we've seen here:
+
+### "Pod could not be created"
 
 ```
 Pod could not be created: This machine does not have the resources to deploy your pod. Please try a different machine.
 ```
 
-The worker keeps running the previous image; the new one never propagates.
+**Cause**: RunPod can't allocate the `gpuTypeId` declared in `.runpod/tests.json` during the build window. The Docker image is fine — RunPod just couldn't find a free host of that type.
 
-**Cause**: RunPod's Hub validator spins up a real GPU pod to execute `.runpod/tests.json` after each build. If RunPod can't allocate the `gpuTypeId` named in that file during the build window, the whole build fails — even though the Docker image itself is fine.
+**Fix**: switch `gpuTypeId` to a higher-availability pool. The template currently uses `"NVIDIA GeForce RTX 4090"` because it has the best pool availability across RunPod's regions; `"NVIDIA RTX A5000"` works too but tends to be scarcer. Re-trigger the build after editing.
 
-**Fix**: this template currently keeps Hub metadata under `.runpod/` rather than `.runpod/`, so Hub auto-detection is disabled. When the folder is restored, keep `tests_.json` (underscore suffix) rather than `tests.json` if you want to skip validator execution.
+### `nvidia-container-cli: requirement error: unsatisfied condition: cuda>=12.9`
 
-To re-enable testing later, rename `.runpod/` back to `.runpod/`, then rename `tests_.json` to `tests.json` and consider switching `gpuTypeId` from `"NVIDIA RTX A5000"` to `"NVIDIA GeForce RTX 4090"` — 4090 has the highest pool availability across RunPod's regions.
+```
+Error response from daemon: failed to create task for container: ...
+nvidia-container-cli: requirement error: unsatisfied condition: cuda>=12.9,
+please update your driver to a newer version, or use an earlier cuda container
+```
+
+**Cause**: the container's CUDA floor (12.9, inherited from `vllm/vllm-openai:v0.11.2`) is higher than the CUDA version the host driver exposes. RunPod scheduled the test pod on a host that satisfied `allowedCudaVersions` *on paper* but doesn't actually meet the container's prestart-hook requirement.
+
+The trap: `allowedCudaVersions` tells RunPod "the worker accepts these driver CUDA versions." If older versions are listed there, RunPod is free to schedule on older-driver hosts, and the container's own requirement labels then reject the host at prestart. Result: intermittent failures (depends which host got picked).
+
+**Fix**: keep `allowedCudaVersions` in both `.runpod/tests.json` and `.runpod/hub.json` aligned with the actual minimum the container needs. For the current vLLM v0.11.x base, that's `["13.0", "12.9"]`. Don't pad the list with older versions just because they look harmless — every entry that the container can't actually run on is a future flake.
+
+If you bump vLLM, re-check the CUDA floor from upstream's release notes (vLLM v0.11.0 was the bump to CUDA 13).
+
+### Build timeout (30 minutes)
+
+```
+Build exceeded maximum time limit of 1800 seconds (30.0 minutes). Build terminated.
+```
+
+**Cause**: RunPod's build pipeline has a hard 30-minute ceiling. The image bakes ~4 GB of model weights (MinerU VLM + PDF-Extract-Kit) and installs vLLM + Torch on top; on a slow build-region day, those steps alone can blow past the cap.
+
+**Fix**: the `Dockerfile` already uses `hf-xet` with `HF_XET_HIGH_PERFORMANCE=1` for fast model bakes, and the two model downloads are split into separate RUN layers so a partial cache survives retries. If you still time out:
+
+- Re-trigger the build (often a transient HF-egress slowdown)
+- Pin a smaller VLM model via `MINERU_VL_MODEL_NAME` for http-client backends — doesn't help here since the bake is unconditional
+- As a last resort, drop one of the baked models and rely on RunPod's per-endpoint model cache (one model only — see the [model caching docs](https://docs.runpod.io/serverless/endpoints/manage-endpoints))
+
+### Escape hatch: skip the validator entirely
+
+If a release is urgent and the Hub validator is the only thing blocking it, rename `.runpod/tests.json` to `.runpod/tests_.json` in the repo (underscore suffix). The Hub validator looks for the exact filename `tests.json`; the renamed file is invisible to it and no test pod is scheduled. Rename it back when the underlying issue is resolved.
+
+This loses all CI signal — only use it as a temporary unblock, not a default.
 
 ## VLM backend crashes on Blackwell GPUs (cc=12.0)
 

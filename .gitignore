@@ -19,6 +19,8 @@ yarn.lock
 .playwright-mcp
 .claude
 .serena
+.wolf
+CLAUDE.md
 
 tmp-screenshots
 tmp-scripts/
