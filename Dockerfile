@@ -94,8 +94,12 @@ RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_XET_HIGH_PERFORMANCE=1 \
     snapshot_download(repo_id='opendatalab/PDF-Extract-Kit-1.0')"
 
 # Copy the worker code last so iterating on it doesn't bust the pip or
-# model-cache layers.
+# model-cache layers. handler.py is the entry point; the worker/ package
+# holds the modules it imports (schema, io, parse, package, debug,
+# logging). Both must land at /worker/ so `from worker import ...`
+# resolves from the script's directory.
 COPY handler.py /worker/handler.py
+COPY worker /worker/worker
 
 # Tiny fixture PDF used by local smoke input and optional Hub tests. It is
 # copied into /worker/test-fixture.pdf so validations can round-trip a real
