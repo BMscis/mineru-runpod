@@ -61,7 +61,7 @@ class MineruClient:
         Input formats (auto-detected by the worker):
             PDF, image (PNG/JPEG/GIF/BMP/TIFF/WebP), DOCX, PPTX, XLSX.
 
-        Backends (MinerU 3.1.x):
+        Backends (MinerU 3.2.x):
             "pipeline"           PaddleOCR + layout/formula/table. 109-language OCR.
                                   Best for non-Latin scripts; respects `lang`.
             "vlm-auto-engine"    VLM via vLLM (default). Fast on EN/CH; ignores `lang`.

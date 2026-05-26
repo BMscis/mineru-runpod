@@ -9,7 +9,7 @@ from runpod.serverless.utils.rp_validator import validate
 
 VALID_RETURNS = {"tarball_b64", "inline", "s3"}
 
-# MinerU 3.1.x backends. Validated at the handler boundary so callers get a
+# MinerU 3.2.x backends. Validated at the handler boundary so callers get a
 # friendly error instead of a deep MinerU stack trace.
 VALID_BACKENDS = {
     "pipeline",

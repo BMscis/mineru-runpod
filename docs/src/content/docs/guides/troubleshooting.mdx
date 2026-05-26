@@ -12,7 +12,7 @@ When something doesn't work, the worker tries hard to fail loudly. Every respons
   "debug": {
     "backend": "vlm-auto-engine",
     "input_format": "pdf",
-    "model_dir": "/root/.cache/huggingface/hub/models--opendatalab--MinerU2.5-Pro-2604-1.2B/snapshots/<hash>",
+    "model_dir": "/root/.cache/huggingface/hub/models--opendatalab--MinerU2.5-Pro-2605-1.2B/snapshots/<hash>",
     "gpu": {
       "available": true,
       "name": "NVIDIA RTX 4090",
@@ -98,7 +98,7 @@ This loses all CI signal — only use it as a temporary unblock, not a default.
 
 ```
 compute_capability: 12.0 >= 8.0
-INFO Starting to load model .../MinerU2.5-Pro-2604-1.2B/...
+INFO Starting to load model .../MinerU2.5-Pro-2605-1.2B/...
 INFO Model loading took 2.16 GiB and 0.36 seconds
 CUDA error (...flash-attention/hopper/flash_fwd_launch_template.h:188): invalid argument
 ```
@@ -107,7 +107,7 @@ CUDA error (...flash-attention/hopper/flash_fwd_launch_template.h:188): invalid 
 
 **Cause**: xformers / flash-attention in vllm 0.11.2 (our base image) ships kernels for Ampere (8.x), Ada (8.9), and Hopper (9.0) — no Blackwell-SM120 code path. On Blackwell, xformers misroutes to the Hopper kernel and crashes during VLM model init.
 
-**Why we can't just bump vllm**: MinerU 3.1.x's pyproject pins `vllm>=0.10.1.1,<0.12`. The first vllm release with any Blackwell mention in its notes is `v0.13.0` (2025-12-19, SM103 / GB300 "Blackwell Ultra"); broader Blackwell coverage follows in v0.14+. All Blackwell-aware vllm versions sit above MinerU's `<0.12` ceiling, so until MinerU loosens that pin we're stuck on v0.11.x, which has no SM120 kernel path. The v0.6.6 → v0.11.2 bump did not change this because v0.11.2 only adds SM100 (data-center Blackwell B200/GB200) MoE-prep code, not the SM120 (consumer 5090 / PRO 6000 Blackwell) flash-attn paths the VLM uses.
+**Why we can't just bump vllm**: MinerU 3.2.x's pyproject pins `vllm>=0.10.1.1,<0.12`. The first vllm release with any Blackwell mention in its notes is `v0.13.0` (2025-12-19, SM103 / GB300 "Blackwell Ultra"); broader Blackwell coverage follows in v0.14+. All Blackwell-aware vllm versions sit above MinerU's `<0.12` ceiling, so until MinerU loosens that pin we're stuck on v0.11.x, which has no SM120 kernel path. The v0.6.6 → v0.11.2 bump did not change this because v0.11.2 only adds SM100 (data-center Blackwell B200/GB200) MoE-prep code, not the SM120 (consumer 5090 / PRO 6000 Blackwell) flash-attn paths the VLM uses.
 
 **Fix**: keep the default `gpuIds: "ADA_24,AMPERE_24,AMPERE_48"` — all unambiguously pre-Blackwell. If you've manually opted into `ADA_48_PRO`, that pool can mix in Blackwell SKUs since RunPod groups them under the same pool name — remove it from your endpoint's GPU pool list. For workloads that need a 48 GB Ada-or-newer card, the `pipeline` backend doesn't use xformers/flash-attn and is unaffected, so it runs on Blackwell fine; only the VLM/hybrid backends crash. See [Choosing a GPU](/mineru-runpod/guides/choosing-gpu/#a-note-on-ada_48_pro-and-blackwell) for the GPU-pool background.
 

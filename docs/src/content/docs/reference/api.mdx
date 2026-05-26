@@ -83,7 +83,7 @@ Response (truncated):
   "ok": true,
   "elapsed_seconds": 18.4,
   "pages_processed": 100,
-  "mineru_version": "3.1.x",
+  "mineru_version": "3.2.x",
   "source": "url:https://example.com/report.pdf",
   "tarball_b64": "<base64-encoded gzipped tarball>"
 }
@@ -119,7 +119,7 @@ Every response includes a `debug` block with information that lets you correlate
 {
   "debug": {
     "backend": "vlm-auto-engine",
-    "model_dir": "/root/.cache/huggingface/hub/models--opendatalab--MinerU2.5-Pro-2604-1.2B/snapshots/<hash>",
+    "model_dir": "/root/.cache/huggingface/hub/models--opendatalab--MinerU2.5-Pro-2605-1.2B/snapshots/<hash>",
     "gpu": {
       "available": true,
       "name": "NVIDIA RTX 4090",
@@ -153,7 +153,7 @@ When the handler raises or returns an error, the response sets `ok: false` and i
   "error": "ValueError: must provide exactly one of file_url / file_b64 / volume_path",
   "ok": false,
   "elapsed_seconds": 0.1,
-  "mineru_version": "3.1.x",
+  "mineru_version": "3.2.x",
   "traceback": "Traceback (most recent call last):\n  File ..."
 }
 ```

@@ -1,5 +1,5 @@
 # MinerU on RunPod Serverless — generic PDF parsing worker.
-# MinerU 3.1.x runtime, MinerU2.5-Pro-2604-1.2B VLM as the default model.
+# MinerU 3.2.x runtime, MinerU2.5-Pro-2605-1.2B VLM as the default model.
 #
 # Base image: vllm/vllm-openai (recommended by MinerU upstream — bundles CUDA
 # + a working vLLM that the VLM backend depends on).
@@ -10,7 +10,7 @@
 # Model weights are baked into the image at build time (under HF's default
 # cache at /root/.cache/huggingface). RunPod's Cached Models
 # dashboard feature only supports one model per endpoint, and MinerU needs
-# two: the VLM (opendatalab/MinerU2.5-Pro-2604-1.2B) and the pipeline-
+# two: the VLM (opendatalab/MinerU2.5-Pro-2605-1.2B) and the pipeline-
 # backend model set (opendatalab/PDF-Extract-Kit-1.0). Baking both removes
 # the dependency on RunPod's Cached Models setup, the Network Volume, and
 # any per-endpoint runtime-download tax. Trade-off: image grows by ~4 GB.
@@ -24,9 +24,12 @@ FROM vllm/vllm-openai:${VLLM_VERSION}
 # anything tries to call out at runtime — fail-fast against misconfigured
 # endpoints.
 #
-# Model selection: MinerU 3.1.x's library default is already
-# `opendatalab/MinerU2.5-Pro-2604-1.2B` for the VLM backend; pipeline
+# Model selection: MinerU 3.2.x's library default is
+# `opendatalab/MinerU2.5-Pro-2605-1.2B` for the VLM backend; pipeline
 # backend uses `opendatalab/PDF-Extract-Kit-1.0`. Both are baked below.
+# Note: MinerU bumps the VLM default on minor-version releases (3.1→3.2
+# bumped 2604→2605); the requirements.txt pin is minor-locked to keep
+# the baked model in sync with the library default.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -65,7 +68,7 @@ RUN uv pip install --system --no-cache -r requirements.txt
 # available, and BEFORE the handler.py COPY so iterating on handler code
 # doesn't bust these layers.
 #
-# - MinerU2.5-Pro-2604-1.2B: the VLM backend's model
+# - MinerU2.5-Pro-2605-1.2B: the VLM backend's model
 # - PDF-Extract-Kit-1.0: the pipeline backend's OCR + layout + formula +
 #   table models
 #
@@ -87,7 +90,7 @@ RUN uv pip install --system --no-cache -r requirements.txt
 # hadolint ignore=DL3059
 RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_XET_HIGH_PERFORMANCE=1 \
     python3 -c "from huggingface_hub import snapshot_download; \
-    snapshot_download(repo_id='opendatalab/MinerU2.5-Pro-2604-1.2B')"
+    snapshot_download(repo_id='opendatalab/MinerU2.5-Pro-2605-1.2B')"
 # hadolint ignore=DL3059
 RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_XET_HIGH_PERFORMANCE=1 \
     python3 -c "from huggingface_hub import snapshot_download; \

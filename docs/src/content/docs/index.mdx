@@ -1,6 +1,6 @@
 ---
 title: mineru-runpod
-description: Open-source template to deploy MinerU (3.1 runtime, 2.5 Pro VLM) onto RunPod Serverless in two clicks. Your endpoint, scales to zero, ~$0.001 per page on a warm 24 GB RTX 4090.
+description: Open-source template to deploy MinerU (3.2 runtime, 2.5 Pro VLM) onto RunPod Serverless in two clicks. Your endpoint, scales to zero, ~$0.001 per page on a warm 24 GB RTX 4090.
 template: splash
 hero:
   title: Deploy <br/>MinerU 2.5 Pro <br/>on RunPod <br/><span class="rm-accent">in two clicks</span>
@@ -19,7 +19,7 @@ hero:
       icon: external
       variant: minimal
     - text: MinerU model card
-      link: https://huggingface.co/opendatalab/MinerU2.5-Pro-2604-1.2B
+      link: https://huggingface.co/opendatalab/MinerU2.5-Pro-2605-1.2B
       icon: external
       variant: minimal
 ---
@@ -30,7 +30,7 @@ import { Card, CardGrid } from "@astrojs/starlight/components";
 
 This is an open-source repo and [RunPod Hub](https://runpod.io?ref=31jdfpnq) template — not a hosted service. Fork it, deploy from the Hub, and the worker runs on **your** RunPod account against **your** wallet.
 
-Under the hood it's one Docker image wrapping [MinerU](https://github.com/opendatalab/MinerU) (3.1.x runtime, `MinerU2.5-Pro-2604-1.2B` VLM by default). Send a PDF as a URL, base64 blob, or path on a mounted volume. Get back Markdown, a structured `content_list`, the raw `middle.json`, and extracted images. When traffic stops, RunPod tears the worker down in seconds.
+Under the hood it's one Docker image wrapping [MinerU](https://github.com/opendatalab/MinerU) (3.2.x runtime, `MinerU2.5-Pro-2605-1.2B` VLM by default). Send a PDF as a URL, base64 blob, or path on a mounted volume. Get back Markdown, a structured `content_list`, the raw `middle.json`, and extracted images. When traffic stops, RunPod tears the worker down in seconds.
 
 ## What you get
 

@@ -30,7 +30,7 @@ MAX_URL_FILE_MB = 200
 URL_FETCH_TIMEOUT_SECONDS = 120.0
 
 
-# Magic bytes for the input formats MinerU 3.1.x supports.
+# Magic bytes for the input formats MinerU supports.
 # - PDFs and Office docs pass straight to aio_do_parse (it auto-detects).
 # - Images need preprocessing to single-page PDF via images_bytes_to_pdf_bytes.
 _IMAGE_MAGIC = (

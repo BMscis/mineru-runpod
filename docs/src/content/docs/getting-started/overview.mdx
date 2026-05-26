@@ -3,7 +3,7 @@ title: Overview
 description: Architecture, what's in the repo, supported workloads, and how it compares to Marker, GROBID, and Nougat.
 ---
 
-`mineru-runpod` is a generic, reusable [MinerU](https://github.com/opendatalab/MinerU) PDF-parsing service running on [RunPod Serverless](https://runpod.io?ref=31jdfpnq). MinerU 3.1.x runtime with the [`MinerU2.5-Pro-2604-1.2B`](https://huggingface.co/opendatalab/MinerU2.5-Pro-2604-1.2B) VLM by default. The repo deliberately knows nothing about any specific downstream system — it ships a worker image, a small Python client, and the deploy / destroy glue. Anything that needs `PDF → structured Markdown + JSON` (a RAG pipeline, a document indexer, an Office-doc archive) calls it the same way.
+`mineru-runpod` is a generic, reusable [MinerU](https://github.com/opendatalab/MinerU) PDF-parsing service running on [RunPod Serverless](https://runpod.io?ref=31jdfpnq). MinerU 3.2.x runtime with the [`MinerU2.5-Pro-2605-1.2B`](https://huggingface.co/opendatalab/MinerU2.5-Pro-2605-1.2B) VLM by default. The repo deliberately knows nothing about any specific downstream system — it ships a worker image, a small Python client, and the deploy / destroy glue. Anything that needs `PDF → structured Markdown + JSON` (a RAG pipeline, a document indexer, an Office-doc archive) calls it the same way.
 
 ## What's in the repo
 
@@ -25,9 +25,13 @@ description: Architecture, what's in the repo, supported workloads, and how it c
 
 ## Why MinerU + serverless
 
-- **Accuracy.** The `MinerU2.5-Pro-2604-1.2B` VLM leads the [OmniDocBench](https://github.com/opendatalab/OmniDocBench) leaderboard on text, formula, table, and reading-order metrics — see the [HuggingFace model card](https://huggingface.co/opendatalab/MinerU2.5-Pro-2604-1.2B) and the [technical report](https://arxiv.org/abs/2604.04771).
+- **Accuracy.** The `MinerU2.5-Pro-2605-1.2B` VLM leads the [OmniDocBench](https://github.com/opendatalab/OmniDocBench) leaderboard on text, formula, table, and reading-order metrics — see the [HuggingFace model card](https://huggingface.co/opendatalab/MinerU2.5-Pro-2605-1.2B) and the [technical report](https://arxiv.org/abs/2604.04771).
 - **Economics.** Per-second billing on RunPod with FlashBoot means an idle worker costs nothing. ~$0.0003 per page on a 24 GB RTX 4090 (default) at current rates (see [RunPod pricing](https://www.runpod.io/pricing); rates change).
 - **Licensing.** MinerU is Apache 2.0 with explicit commercial thresholds (free below 100M MAU and $20M monthly revenue, with attribution). Among open-source GPU-class PDF parsers, that's the cleanest license for production SaaS use.
+
+[![MinerU2.5-Pro-2605 vs other PDF parsers — OmniDocBench leaderboard](https://hotelll.github.io/MinerU2.5-Pro/leaderboard.png)](https://huggingface.co/opendatalab/MinerU2.5-Pro-2605-1.2B)
+
+<sub>Source: [MinerU2.5-Pro-2605-1.2B model card](https://huggingface.co/opendatalab/MinerU2.5-Pro-2605-1.2B) and the [MinerU 2.5 technical report](https://arxiv.org/abs/2604.04771).</sub>
 
 ## How it compares
 

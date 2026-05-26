@@ -39,7 +39,7 @@ def collect_gpu_info() -> dict[str, Any]:
 @functools.lru_cache(maxsize=1)
 def find_model_dir() -> str | None:
     """Locate the MinerU model snapshot under HF_HOME so we can prove which
-    weights actually loaded (Pro-2604 vs the library default 2509).
+    weights actually loaded (Pro-2605 vs an older or unexpected variant).
 
     Cached because the model dir doesn't change after worker boot and the
     rglob over ~/.cache/huggingface/hub is non-trivial on cold cache.
@@ -185,7 +185,7 @@ def probe_filesystem() -> dict[str, Any]:
     # present, and what (if anything) MinerU's library would find.
     if hub_path and hub_path.is_dir():
         for model_id in (
-            "opendatalab/MinerU2.5-Pro-2604-1.2B",  # VLM backend
+            "opendatalab/MinerU2.5-Pro-2605-1.2B",  # VLM backend
             "opendatalab/PDF-Extract-Kit-1.0",      # pipeline backend
         ):
             out["resolution_attempts"].append(

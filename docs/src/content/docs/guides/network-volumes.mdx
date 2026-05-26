@@ -46,7 +46,7 @@ Network volume storage on RunPod is roughly **$0.07/GB-month** (check [current p
 
 ## Problem 2: caching MinerU weights
 
-**You don't need to do anything here** — both model dependencies (`opendatalab/MinerU2.5-Pro-2604-1.2B` for the VLM backend and `opendatalab/PDF-Extract-Kit-1.0` for the pipeline backend) are **baked into the worker image at build time**, at `/root/.cache/huggingface/`. No Cached Models setup, no Network Volume, no runtime download.
+**You don't need to do anything here** — both model dependencies (`opendatalab/MinerU2.5-Pro-2605-1.2B` for the VLM backend and `opendatalab/PDF-Extract-Kit-1.0` for the pipeline backend) are **baked into the worker image at build time**, at `/root/.cache/huggingface/`. No Cached Models setup, no Network Volume, no runtime download.
 
 If you'd rather slim the image and rely on RunPod's Cached Models feature for the VLM only (which has a single-model dashboard limit), fork the Dockerfile to skip the `RUN snapshot_download` step. The pipeline backend would then need either a Network Volume or `HF_HUB_OFFLINE=0` for runtime downloads.
 

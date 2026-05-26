@@ -12,7 +12,7 @@ export default defineConfig({
 		starlight({
 			title: "mineru-runpod",
 			description:
-				"Open-source template to deploy MinerU (3.1 runtime, MinerU 2.5 Pro VLM) onto RunPod Serverless in two clicks. Self-hosted endpoint, scales to zero, ~$0.0003 per page on 24 GB Ampere.",
+				"Open-source template to deploy MinerU (3.2 runtime, MinerU 2.5 Pro VLM) onto RunPod Serverless in two clicks. Self-hosted endpoint, scales to zero, ~$0.0003 per page on 24 GB Ampere.",
 			favicon: "/favicon.png",
 			customCss: ["./src/styles/custom.css"],
 			social: [{ icon: "github", label: "GitHub", href: REPO_URL }],
