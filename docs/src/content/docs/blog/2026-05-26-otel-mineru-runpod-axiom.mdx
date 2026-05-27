@@ -14,7 +14,7 @@ tags:
 
 *Last Updated: 2026-05-26*
 
-If you're running a serverless worker on RunPod, you can't ssh in to read logs and you can't run a sidecar agent — the worker scales to zero between jobs. You need to ship logs and metrics off the box during the request lifetime, on the worker's own time. The mineru-runpod template includes an OpenTelemetry exporter for exactly this, and [Axiom](https://axiom.co/) is the sink I picked for my own deployment.
+If you're running a serverless worker on [RunPod](https://runpod.io?ref=31jdfpnq), you can't ssh in to read logs and you can't run a sidecar agent — the worker scales to zero between jobs. You need to ship logs and metrics off the box during the request lifetime, on the worker's own time. The mineru-runpod template includes an OpenTelemetry exporter for exactly this, and [Axiom](https://axiom.co/) is the sink I picked for my own deployment.
 
 This post is the exact env-var layout. If you use a different OTLP backend (Honeycomb, Grafana, Datadog, Jaeger, your own [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)), the [observability guide](/mineru-runpod/guides/observability/) covers the vendor-neutral setup; come back here only for the Axiom-specific values.
 
@@ -174,3 +174,8 @@ No. The mineru-runpod worker uses the OpenTelemetry Python SDK with the OTLP/HTT
 ## Same template, different backend
 
 The four env vars above are the only Axiom-specific configuration in this whole setup. Swap the URL and headers and the mineru-runpod worker ships the same logs, traces, and metrics to anything that speaks OTLP/HTTP — Honeycomb, Grafana Cloud, Datadog's OTLP intake, your own OpenTelemetry Collector. The [observability guide](/mineru-runpod/guides/observability/) covers the vendor-neutral env-var layout and the metric catalog. Different backends, same template.
+
+If this saved you time, the easiest way to say thanks is [signing up for RunPod through this link](https://runpod.io?ref=31jdfpnq). Star the [repo on GitHub](https://github.com/sergeyshmakov/mineru-runpod) for updates.
+
+* * *
+<small><strong>Disclosure:</strong> RunPod links in this post use a referral code that credits me at no cost to you. The post would read the same without it.</small>

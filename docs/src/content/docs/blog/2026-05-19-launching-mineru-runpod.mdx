@@ -207,6 +207,5 @@ Yes. Fork the repo and update the Dockerfile's `huggingface_hub.snapshot_downloa
 
 Set `workers_min=1` on the endpoint. You pay for the always-on worker around the clock (~$0.000306/s on the 4090 default, so ~$26/day or ~$800/month). Worth it if your traffic is steady enough that the warm worker stays busy, or if your latency SLO can't tolerate the cold-start window. For bursty traffic, `workers_min=0` with FlashBoot enabled is usually cheaper.
 
----
-
-<small>**Disclosure:** RunPod links in this post use a referral code that credits me at no cost to you. Full disclosure: that's a referral link. The post would read the same without it.</small>
+* * *
+<small><strong>Disclosure:</strong> RunPod links in this post use a referral code that credits me at no cost to you. The post would read the same without it.</small>
