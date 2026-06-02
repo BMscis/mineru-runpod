@@ -13,7 +13,7 @@
     }
   ],
   "config": {
-    "gpuTypeId": "NVIDIA RTX A5000",
+    "gpuTypeId": "NVIDIA A40",
     "gpuCount": 1,
     "containerDiskInGb": 50,
     "allowedCudaVersions": ["13.0", "12.9"]
